@@ -36,6 +36,10 @@
  *
  * JJ Goessens mailto:jj@goessens.dyndns.org
  *
+ * version 1.04 : changed some variables from signed to unsigned to remove compile time warnings.
+ * Stephenw10
+ *
+ *
  */
 
 #include <stdlib.h>
@@ -64,8 +68,8 @@
 #include <time.h>
 
 //  #include "lcterm.h"
+#include "lcd_lib.h"
 
-// #include "lcd_lib.h"
 #ifndef LPT_DEFAULT
 #define LPT_DEFAULT 0x378
 #endif
@@ -153,7 +157,7 @@ sdeclcd_writecmd (PrivateData *p, char cmd) {
  * Write a custom icon to the LCDs CGRam
  */
 void
-sdeclcd_writecgram(PrivateData *p, int n, char data[]) {
+sdeclcd_writecgram(PrivateData *p, int n, unsigned char data[]) {
 
     //report(RPT_DEBUG, "%s: writing GC_RAM data", "sdeclcd");
     
@@ -532,7 +536,7 @@ sdeclcd_init_hbar (Driver *drvthis)
       b__X____,
       b__X____ };
   
-  static char hbar_2[] = 
+  static unsigned char hbar_2[] = 
     { b__XX___,
       b__XX___,
       b__XX___,
@@ -542,7 +546,7 @@ sdeclcd_init_hbar (Driver *drvthis)
       b__XX___,
       b__XX___ };
   
-  static char hbar_3[] =
+  static unsigned char hbar_3[] =
     { b__XXX__,
       b__XXX__,
       b__XXX__,
@@ -552,7 +556,7 @@ sdeclcd_init_hbar (Driver *drvthis)
       b__XXX__,
       b__XXX__ };
 
-  static char hbar_4[] =
+  static unsigned char hbar_4[] =
     { b__XXXX_,
       b__XXXX_,
       b__XXXX_,
@@ -562,7 +566,7 @@ sdeclcd_init_hbar (Driver *drvthis)
       b__XXXX_,
       b__XXXX_ };
 
-  static char hbar_5[] =
+  static unsigned char hbar_5[] =
     { b__XXXXX,
       b__XXXXX,
       b__XXXXX,
@@ -604,7 +608,7 @@ sdeclcd_init_vbar (Driver *drvthis)
       b_______,
       b__XXXXX };
   
-  static char vbar_2[] = 
+  static unsigned char vbar_2[] = 
     { b_______,
       b_______,
       b_______,
@@ -614,7 +618,7 @@ sdeclcd_init_vbar (Driver *drvthis)
       b__XXXXX,
       b__XXXXX };
   
-  static char vbar_3[] =
+  static unsigned char vbar_3[] =
     { b_______,
       b_______,
       b_______,
@@ -625,7 +629,7 @@ sdeclcd_init_vbar (Driver *drvthis)
       b__XXXXX };
 
 
-  static char vbar_4[] =
+  static unsigned char vbar_4[] =
     { b_______,
       b_______,
       b_______,
@@ -636,7 +640,7 @@ sdeclcd_init_vbar (Driver *drvthis)
       b__XXXXX };
 
 
-  static char vbar_5[] =
+  static unsigned char vbar_5[] =
     { b_______,
       b_______,
       b_______,
@@ -646,19 +650,9 @@ sdeclcd_init_vbar (Driver *drvthis)
       b__XXXXX,
       b__XXXXX };
 
-  static char vbar_6[] =
+  static unsigned char vbar_6[] =
     { b_______,
       b_______,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX };
-      
-  static char vbar_7[] =
-    { b_______,
-      b__XXXXX,
       b__XXXXX,
       b__XXXXX,
       b__XXXXX,
@@ -666,8 +660,18 @@ sdeclcd_init_vbar (Driver *drvthis)
       b__XXXXX,
       b__XXXXX };
       
+  static unsigned char vbar_7[] =
+    { b_______,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX };
+      
 
-  static char vbar_8[] =
+  static unsigned char vbar_8[] =
     { b__XXXXX,
       b__XXXXX,
       b__XXXXX,
@@ -839,7 +843,7 @@ sdeclcd_vbar (Driver *drvthis, int x, int y, int len, int promille, int options)
  */
 MODULE_EXPORT void sdeclcd_num(Driver *drvthis, int x, int num)
 {
-  PrivateData *p = (PrivateData *) drvthis->private_data;
+//  PrivateData *p = (PrivateData *) drvthis->private_data; /*unused in this function. Steve */
 
   static char bignum_map[11][2][2] = {
     { /* 0: */
