@@ -39,6 +39,9 @@
  * version 1.04 : changed some variables from signed to unsigned to remove compile time warnings.
  * Stephenw10
  *
+ * version 1.05 : Reworked keyboard to add support for X-e boxes. fmertz dec 2011
+ *
+ *
  *
  */
 
@@ -913,56 +916,73 @@ MODULE_EXPORT void sdeclcd_num(Driver *drvthis, int x, int num)
 
 /*
  * Get keyboard and return key name . jj.Goessens nov 2009
+ *
+ * Reworked to add support for X-e boxes. fmertz dec 2011
 */
 
 MODULE_EXPORT const char *sdeclcd_get_key(Driver *drvthis)
 {
 	PrivateData *p = (PrivateData *) drvthis->private_data;
-	unsigned int readval;
-	char *keystr = NULL;
+	unsigned readval;
 	
-	// check elapsed time for backlight
-	if (p->bklgt_timer != 0)
+	// check backlight timer
+	if (p->bklgt_timer != 0) //Auto-off feature turned on
 	    {
-	    if ((time(NULL)-p->bklgt_lasttime) > p->bklgt_timer) p->bklgt=0;
-	    else p->bklgt=1;
-	    port_out(p->port+2, ((port_in(p->port+2) & 0xFE) | (0x00 + (1 ^ p->bklgt))));
-	    }
-	
-	// read keyboard status
-	readval = (port_in(p->port+1));
-	
-	// mask usefull bits
-	readval = (readval & 0x68) ;
-	
-	// check if bkd change
-	if (readval != p->lastkbd)
-	    {
-	    // reset elepsed time counter
-            p->bklgt_lasttime=time(NULL);
-    
-	    // return value according keys
-	    switch (readval) 
-		{
-		// Up
-		case 0x48 : keystr="Up";
-			    break;
-		// Right
-		case 0x60 : keystr="Right";
-			    break;
-		// Down
-		case 0x40 : keystr="Down";
-			    break;
-		// Left
-		case 0x68 : keystr="Left";
-			    break;
-			    
-		default   : keystr=NULL;
-			    break;
+	    if (time(NULL)-p->bklgt_lasttime > p->bklgt_timer) //timer expired
+			{
+			if (1 == p->bklgt) //light on?
+				{
+				p->bklgt=0;
+				port_out(p->port+2, port_in(p->port+2) | 0x01); //turns light off
+				//port_out(p->port+2, ((port_in(p->port+2) & 0xFE) | (0x00 + (1 ^ p->bklgt))));
+				}
+			}
+	    else //timer is current
+			if (0 == p->bklgt) //light is off?
+				{
+				p->bklgt=1;
+	    		port_out(p->port+2, port_in(p->port+2) & 0xFE); //turns light on
+	    		}
 		}
-            p->lastkbd=readval;
-            
-	    }
-	return keystr;
+	// read keyboard status and mask according to
+	// http://en.wikipedia.org/wiki/Parallel_port (status register)
+	readval = port_in(p->port+1) & 0xF8;
+	
+	// check if kbd change
+	if (readval == p->lastkbd)
+		return NULL;
+	// reset backlight counter
+	p->bklgt_lasttime=time(NULL);
+
+	p->lastkbd=readval;
+	// return text according to status reg mapping:
+	//X-e 	 U:70 R:F8 D:68 L:58 Rel:78
+	//X-peak U:C8 R:E0 D:C0 L:E8 Rel: 88,80,A8,A0
+	switch (readval) 
+		{
+		case 0x70:
+		case 0xC8:
+				return("Up");
+		case 0xF8:
+		case 0xE0:
+				return ("Right");
+		case 0x68:
+		case 0xC0:
+				return ("Down");
+		case 0x58:
+		case 0xE8:
+				return("Left");
+		case 0x78: //button Releases
+		case 0x88:
+		case 0x80:
+		case 0xA8:
+		case 0xA0:
+				return(NULL);
+		//Combination not mapped:
+		//
+		default:
+				report(RPT_DEBUG, "LCDd sdeclcd.c/sdeclcd_get_key() status value %2x unmapped", readval);
+			    return(NULL);
+		}
 }
 
