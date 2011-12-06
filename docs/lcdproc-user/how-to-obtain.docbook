@@ -1,0 +1,130 @@
+<chapter id="how-to-obtain">
+<title>How to Obtain LCDproc</title>
+
+<sect1 id="versioning">
+<title>Versioning</title>
+
+<para>
+At the time of writing the following majors versions of LCDproc are floating
+around on the internet:
+</para>
+
+<variablelist>
+
+<varlistentry>
+  <term>LCDproc 0.5.3</term>
+  <listitem>
+    <para>
+      LCDproc 0.5.3 is the current stable version of LCDproc.
+      This is the version recommended to use.
+    </para>
+  </listitem>
+</varlistentry>
+
+<varlistentry>
+  <term>LCDproc 0.5.2</term>
+  <listitem>
+    <para>
+      LCDproc 0.5.2 is an old stable version of LCDproc.
+      It now has been superseded with LCDproc 0.5.3.
+    </para>
+  </listitem>
+</varlistentry>
+
+<varlistentry>
+  <term>LCDproc 0.5.1</term>
+    <listitem>
+    <para>
+      LCDproc 0.5.1 is an old stable version of LCDproc.
+      It was the second stable version of LCDproc after the move to the 0.5 API.
+    </para>
+  </listitem>
+</varlistentry>
+
+</variablelist>
+
+</sect1>
+
+<sect1 id="tar">
+<title>Download Yesterday's CVS Version of LCDproc as a Tarball</title>
+
+<para>
+There are nightly distributions of the CVS branches of LCDproc. You can download them from
+<ulink url="http://lcdproc.sourceforge.net/nightly/"></ulink>
+</para>
+
+<para>
+To extract the files run
+</para>
+
+<screen>
+<prompt>$</prompt> <userinput>tar xvfz lcdproc-CVS-*.tar.gz</userinput>
+</screen>
+
+</sect1>
+
+<sect1 id="cvs">
+<title>Download The Latest Version of LCDproc from CVS</title>
+
+<para>
+Of course you can download the latest stuff from CVS via anonymous login.
+</para>
+
+<para>
+Login to CVS:
+</para>
+
+<screen>
+<prompt>$</prompt> <userinput>cvs -d:pserver:anonymous@lcdproc.cvs.sourceforge.net:/cvsroot/lcdproc login</userinput>
+</screen>
+
+<para>
+(Hit enter when prompted for a password.)
+</para>
+
+<para>
+Get the files from CVS:
+</para>
+
+<screen>
+<prompt>$</prompt> <userinput>cvs -d:pserver:anonymous@lcdproc.cvs.sourceforge.net:/cvsroot/lcdproc checkout -r stable-0-5-x lcdproc</userinput>
+</screen>
+
+<para>
+Once you've done that and want to update the downloaded files to the latest stuff
+you can use the "update" command of CVS (Make sure to be in the lcdproc directory.):
+</para>
+
+<screen>
+<prompt>$</prompt> <userinput>cvs update -d</userinput>
+</screen>
+
+<para>
+Now that once you have downloaded the files you can prepare them for
+compiling, but first you should (you don't have to) copy them to another
+place on your machine.
+</para>
+
+</sect1>
+
+<sect1 id="apt-get">
+<title>apt-get</title>
+
+<para>
+Debian GNU/Linux users can get the Debian package of <package>LCDproc</package>,
+which is in the unstable and testing distributions.
+</para>
+
+<para>
+Provided apt-get is configured properly, you should be able to install the package running:
+</para>
+
+<screen>
+<prompt>$</prompt> <userinput>su</userinput>
+<prompt>Password:</prompt> <userinput>top secret</userinput>
+<prompt>#</prompt> <userinput>apt-get install lcdproc</userinput>
+</screen>
+
+</sect1>
+
+</chapter>
