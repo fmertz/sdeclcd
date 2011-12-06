@@ -30,9 +30,6 @@
 
 #include "lcd.h"
 
-
-
-
 MODULE_EXPORT int sdeclcd_init (Driver *drvthis);
 MODULE_EXPORT void sdeclcd_close (Driver *drvthis);
 MODULE_EXPORT int sdeclcd_width (Driver *drvthis);
@@ -48,11 +45,13 @@ MODULE_EXPORT int sdeclcd_icon (Driver *drvthis, int x, int y, int icon);
 MODULE_EXPORT void sdeclcd_heartbeat( Driver * drvthis, int type );
 MODULE_EXPORT void sdeclcd_vbar (Driver *drvthis, int x, int y, int len, int promille, int options);
 MODULE_EXPORT void sdeclcd_hbar (Driver *drvthis, int x, int y, int len, int promille, int options);
+MODULE_EXPORT void sdeclcd_num (Driver *drvthis, int x, int num);
 
 //
 //MODULE_EXPORT void sdeclcd_old_vbar (Driver *drvthis, int x, int len);
 //MODULE_EXPORT void sdeclcd_old_hbar (Driver *drvthis, int x, int y, int len);
-//MODULE_EXPORT void sdeclcd_num (Driver *drvthis, int x, int num);
 //MODULE_EXPORT void sdeclcd_old_icon (Driver *drvthis, int which, char dest);
 
+// added keypad 
+MODULE_EXPORT const char *sdeclcd_get_key(Driver *drvthis);
 #endif

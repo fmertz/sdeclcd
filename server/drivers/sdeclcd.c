@@ -1,4 +1,4 @@
-/**
+/*
  *  This is the LCDproc driver for SDEC LCD Devices, 
  *  like the one found in the FireBox firewall device.
  *
@@ -23,6 +23,19 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301
  *
  *  Thanks for playing!
+ *
+ * version 1.01 : adding keyboard support for firebox X series
+ * JJ Goessens mailto:jj@goessens.dyndns.org
+ *
+ * version 1.02 : adding backlight timer 
+ * uses new variable in LCDd.conf : Backlight_Timer=<seconds>
+ * if not declared or =0, no timer activated
+ *
+ * version 1.03 : added vbar support & bigclock support
+ * heatbeat does not work anymore due to number of user definable chars
+ *
+ * JJ Goessens mailto:jj@goessens.dyndns.org
+ *
  */
 
 #include <stdlib.h>
@@ -41,13 +54,18 @@
 # include "config.h"
 #endif
 
-#include "shared/str.h"
+//#include "shared/str.h"
+//#include "str.h"
 #include "lcd.h"
 #include "sdeclcd.h"
 #include "report.h"
 #include "adv_bignum.h"
 
+#include <time.h>
 
+//  #include "lcterm.h"
+
+// #include "lcd_lib.h"
 #ifndef LPT_DEFAULT
 #define LPT_DEFAULT 0x378
 #endif
@@ -62,9 +80,9 @@
 typedef enum
 {
   CCMODE_STANDARD,    /* only char 0 is used for heartbeat */
-  CCMODE_VBAR,        /* We dont use vbars as of 2-16-08 */
+  CCMODE_VBAR,        
   CCMODE_HBAR,        
-  CCMODE_BIGNUM       /* We don't use hbars as of 2-16-08 */
+  CCMODE_BIGNUM       
 } CCMode;
 
 typedef struct driver_private_data {
@@ -72,6 +90,9 @@ typedef struct driver_private_data {
         CCMode last_ccmode;      /* custom character set that is loaded in the display */
 	unsigned int port;       /* port that we talk with the device */
 	unsigned int bklgt;      /* backlight is on or off */
+	unsigned int lastkbd;	 /* last keyboard status to detect changes */
+	unsigned int bklgt_timer;	 /* setup for backlight timer */
+	time_t	bklgt_lasttime;	 /* last time for backlight timer */
 	unsigned int charattrib; 
 	unsigned int flags;      /* not used */
 	unsigned int cellwidth;  /* Cell Width */
@@ -140,7 +161,6 @@ sdeclcd_writecgram(PrivateData *p, int n, char data[]) {
     // Specific locations for each CG Storage area is 8 bits apart.
 
     int memaddr = 0x40+(n*8);
-    int pxlline = 0;
     int i = 0;
 
     if (n >= NUM_CCs)
@@ -205,7 +225,6 @@ MODULE_EXPORT int
 sdeclcd_init (Driver *drvthis)
 {
     PrivateData *p;
-    int i;
 
     /* Allocate and store private data */
     p = (PrivateData *) calloc(1, sizeof(PrivateData));
@@ -214,13 +233,15 @@ sdeclcd_init (Driver *drvthis)
     if (drvthis->store_private_ptr(drvthis, p))
           return -1;
 
-    /* Initialize private data and read cofig */
+    /* Initialize private data and read config */
     p->ccmode = p->last_ccmode = CCMODE_STANDARD;
     p->port = drvthis->config_get_int(drvthis->name, "Port", 0, LPT_DEFAULT);
     p->bklgt = drvthis->config_get_bool(drvthis->name, "BackLight", 0, 0);
+    p->bklgt_timer = drvthis->config_get_int(drvthis->name, "BackLight_Timer", 0, 30);
+    p->bklgt_lasttime=time(NULL);
     p->flags = 0;
     p->cellwidth = 5;
-    p->cellheight = 7;
+    p->cellheight = 8;
     p->dispwidth = 20;
     p->dispheight = 2;
     p->lastcharloc = 0x80;
@@ -243,6 +264,7 @@ sdeclcd_init (Driver *drvthis)
     }
 
     sdeclcd_displayinit(p);
+
 
     return 0;
     
@@ -456,22 +478,6 @@ sdeclcd_icon (Driver *drvthis, int x, int y, int icon)
 		  b__X_X_X,
 		  b__XX_XX,
 		  b__XXXXX };
-	static unsigned char arrow_up[] = 
-		{ b____X__,
-		  b___XXX_,
-		  b__X_X_X,
-		  b____X__,
-                  b____X__,
-		  b____X__,
-		  b_______ };
-	static unsigned char arrow_down[] = 
-		{ b____X__,
-		  b____X__,
-		  b____X__,
-		  b__X_X_X,
-		  b___XXX_,
-		  b____X__,
-		  b_______ };
 
     switch (icon) {
 	case ICON_BLOCK_FILLED:
@@ -498,7 +504,7 @@ sdeclcd_icon (Driver *drvthis, int x, int y, int icon)
 MODULE_EXPORT void
 sdeclcd_heartbeat( Driver * drvthis, int type ) {
     
-    //report(RPT_DEBUG, "%s: heartbeat -- using CG RAM icons :]", drvthis->name);
+    report(RPT_DEBUG, "%s: heartbeat -- using CG RAM icons :]", drvthis->name);
     PrivateData *p = drvthis->private_data;
 
     if (type <= 0 || type > 2)
@@ -509,54 +515,6 @@ sdeclcd_heartbeat( Driver * drvthis, int type ) {
 
 }
 
-
-/**
- * This is NOT implemented yet! Used from the curses driver.
- */
-MODULE_EXPORT void
-sdeclcd_vbar (Driver *drvthis, int x, int y, int len, int promille, int options)
-{
-	PrivateData *p = drvthis->private_data;
-	char ascii_map[] = { ' ', ' ', '-', '-', '=', '=', '#', '#' };
-	char *map = ascii_map;
-	int pixels = ((long) 2 * len * p->cellheight) * promille / 2000;
-	int pos;
-
-
-	if ((x <= 0) || (y <= 0) || (x > p->dispwidth))
-		return;
-
-	// x and y are the start position of the bar.
-	// The bar by default grows in the 'up' direction
-	// (other direction not yet implemented).
-	// len is the number of characters that the bar is long at 100%
-	// promille is the number of promilles (0..1000) that the bar should be filled.
-	//
-
-	for (pos = 0; pos < len; pos++) {
-
-		if (y - pos <= 0)
-			return;
-
-		if (pixels >= p->cellheight) {
-			// write a "full" block to the screen... 
-			sdeclcd_chr(drvthis, x, y-pos, '#');
-		}
-		else if (pixels > 0) {
-			// write a partial block...
-			sdeclcd_chr(drvthis, x, y-pos, map[len-1]);
-			break;
-		}
-		else {
-			; // write nothing (not even a space)
-		}
-
-		pixels -= p->cellheight;
-	}
-}
-
-
-
 /**
  * Gets ready to draw the horizontal bars. The concept of this came from lcterm.c
  */
@@ -565,59 +523,59 @@ sdeclcd_init_hbar (Driver *drvthis)
 {
   PrivateData *p = (PrivateData *) drvthis->private_data;
   static unsigned char hbar_1[] = 
-    { b_______,
+    { b__X____,
       b__X____,
       b__X____,
       b__X____,
       b__X____,
       b__X____,
-      b_______ };
+      b__X____,
+      b__X____ };
   
   static char hbar_2[] = 
-    { b_______,
+    { b__XX___,
       b__XX___,
       b__XX___,
       b__XX___,
       b__XX___,
       b__XX___,
-      b_______ };
+      b__XX___,
+      b__XX___ };
   
   static char hbar_3[] =
-    { b_______,
+    { b__XXX__,
       b__XXX__,
       b__XXX__,
       b__XXX__,
       b__XXX__,
       b__XXX__,
-      b_______ };
+      b__XXX__,
+      b__XXX__ };
 
   static char hbar_4[] =
-    { b_______,
+    { b__XXXX_,
       b__XXXX_,
       b__XXXX_,
       b__XXXX_,
       b__XXXX_,
       b__XXXX_,
-      b_______ };
+      b__XXXX_,
+      b__XXXX_ };
 
   static char hbar_5[] =
-    { b_______,
+    { b__XXXXX,
       b__XXXXX,
       b__XXXXX,
       b__XXXXX,
       b__XXXXX,
       b__XXXXX,
-      b_______ };
+      b__XXXXX,
+      b__XXXXX };
 
-  if (p->last_ccmode == CCMODE_HBAR) /* Work already done */
+  if (p->last_ccmode == CCMODE_HBAR) 
     return;
 
-  if (p->ccmode != CCMODE_STANDARD) {
-    /* Not supported (yet) */
-    report(RPT_WARNING, "%s: init_hbar: cannot combine two modes using user-defined characters",
-		    drvthis->name);
-    return;
-  }
+//  report(RPT_WARNING,"%s setting hbar",drvthis->name);
 
   p->ccmode = p->last_ccmode = CCMODE_HBAR;
   
@@ -627,71 +585,380 @@ sdeclcd_init_hbar (Driver *drvthis)
   sdeclcd_set_char(drvthis, 4, hbar_3);
   sdeclcd_set_char(drvthis, 5, hbar_4);
   sdeclcd_set_char(drvthis, 6, hbar_5);
+}
+
+/**
+ * Gets ready to draw the vertical bars. The concept of this came from lcterm.c
+ */
+static void
+sdeclcd_init_vbar (Driver *drvthis)
+{
+  PrivateData *p = (PrivateData *) drvthis->private_data;
+  static unsigned char vbar_1[] = 
+    { b_______,
+      b_______,
+      b_______,
+      b_______,
+      b_______,
+      b_______,
+      b_______,
+      b__XXXXX };
+  
+  static char vbar_2[] = 
+    { b_______,
+      b_______,
+      b_______,
+      b_______,
+      b_______,
+      b_______,
+      b__XXXXX,
+      b__XXXXX };
+  
+  static char vbar_3[] =
+    { b_______,
+      b_______,
+      b_______,
+      b_______,
+      b_______,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX };
+
+
+  static char vbar_4[] =
+    { b_______,
+      b_______,
+      b_______,
+      b_______,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX };
+
+
+  static char vbar_5[] =
+    { b_______,
+      b_______,
+      b_______,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX };
+
+  static char vbar_6[] =
+    { b_______,
+      b_______,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX };
+      
+  static char vbar_7[] =
+    { b_______,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX };
+      
+
+  static char vbar_8[] =
+    { b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX,
+      b__XXXXX };
+      
+  if (p->last_ccmode == CCMODE_VBAR)
+    return;
+
+//  report(RPT_WARNING,"%s setting vbar",drvthis->name);
+
+  p->ccmode = p->last_ccmode = CCMODE_VBAR;
+  
+  // I offset my memory locations because mem loc 0 and 1 are used for the heart beat icon.
+  sdeclcd_set_char(drvthis, 0, vbar_1);
+  sdeclcd_set_char(drvthis, 1, vbar_2);
+  sdeclcd_set_char(drvthis, 2, vbar_3);
+  sdeclcd_set_char(drvthis, 3, vbar_4);
+  sdeclcd_set_char(drvthis, 4, vbar_5);
+  sdeclcd_set_char(drvthis, 5, vbar_6);
+  sdeclcd_set_char(drvthis, 6, vbar_7);
+  sdeclcd_set_char(drvthis, 7, vbar_8);
 
 }
 
-/*
-/////////////////////////////////////////////////////////////////
-// Draws a horizontal bar to the right.  taken from curses
-//
-MODULE_EXPORT void
-sdeclcd_hbar (Driver *drvthis, int x, int y, int len, int promille, int options)
-{
-	PrivateData *p = drvthis->private_data;
-
-	int pixels = (((long) len * p->cellwidth) * promille) / 1000;
-	int pos;
-
-	if ((x <= 0) || (y <= 0) || (y > p->dispheight))
-		return;
-
-	// x and y are the start position of the bar.
-	// The bar by default grows in the 'right' direction
-	// (other direction not yet implemented).
-	// len is the number of characters that the bar is long at 100%
-	// promille is the number of promilles (0..1000) that the bar should be filled.
-	
-        report(RPT_DEBUG, "%s: Parms for hbar: x:%i y:%i len:%i pro:%i",drvthis->name,x,y,len,promille);
-
-	for (pos = 0; pos < len; pos++) {
-                report(RPT_DEBUG, "%s: hbar pixels: %i",drvthis->name, pixels);
-		if (x + pos > p->dispwidth)
-			return;
-                        //sdeclcd_chr(drvthis, x, y,'@');
-                        //sdeclcd_chr(drvthis, 19, y,'@');
-
-		if (pixels >= p->cellwidth * 2/3) {
-			// write a "full" block to the screen... 
-                        report(RPT_DEBUG, "%s: hbar found 2/3 x:%i y:%i", drvthis->name,x+pos, y);
-			sdeclcd_chr(drvthis, x+pos, y, '=');
-                        
-                        
-		}
-		else if (pixels > p->cellwidth * 1/3) {
-			// write a partial block... 
-                        report(RPT_DEBUG, "%s: hbar found 1/3 x:%i y:%i", drvthis->name,x+pos, y);
-			sdeclcd_chr(drvthis, x+pos, y, '-');
-			break;
-		}
-		else {
-			; // write nothing (not even a space)
-		}
-
-		pixels -= p->cellwidth;
-                if (pixels <= 0)
-                    break;
-	}
-}*/
-
-
 /**
- * Draws a horizontal bar from left to right. Taken from lcterm.c
+ * Sets up for big numbers.
+ * \param drvthis  Pointer to driver structure.
  */
+static void
+sdeclcd_init_num (Driver *drvthis)
+{
+  PrivateData *p = (PrivateData *) drvthis->private_data;
+
+  static unsigned char bchar_1[] = 
+    { b___XXXX,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b__XX___ };
+
+  static unsigned char bchar_2[] = 
+    { b__XXXX_,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX };
+
+  static unsigned char bchar_3[] = 
+    { b__XX___,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b___XXXX };
+
+  static unsigned char bchar_4[] = 
+    { b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b__XXXX_ };
+
+  static unsigned char bchar_5[] = 
+    { b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX };
+
+  static unsigned char bchar_6[] = 
+    { b__XXXXX,
+      b_______,
+      b_______,
+      b_______,
+      b_______,
+      b_______,
+      b_______,
+      b__XXXXX };
+
+  static unsigned char bchar_7[] = 
+    { b__XXXX_,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b_____XX,
+      b__XXXX_ };
+
+  static unsigned char bchar_8[] = 
+    { b___XXXX,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b__XX___,
+      b___XXXX };
+
+
+  if (p->last_ccmode == CCMODE_BIGNUM) 
+    /* Work already done */
+    return;
+
+//  report(RPT_WARNING,"%s setting bignum",drvthis->name);
+
+  p->ccmode = p->last_ccmode = CCMODE_BIGNUM;
+
+  // I offset my memory locations because mem loc 0 and 1 are used for the heart beat icon.
+  sdeclcd_set_char(drvthis, 0, bchar_1);
+  sdeclcd_set_char(drvthis, 1, bchar_2);
+  sdeclcd_set_char(drvthis, 2, bchar_3);
+  sdeclcd_set_char(drvthis, 3, bchar_4);
+  sdeclcd_set_char(drvthis, 4, bchar_5);
+  sdeclcd_set_char(drvthis, 5, bchar_6);
+  sdeclcd_set_char(drvthis, 6, bchar_7);
+  sdeclcd_set_char(drvthis, 7, bchar_8);
+}
+
+
+
+
+/*
+ * Draws a horizontal bar from left to right. Taken from lcterm.c
+*/
 MODULE_EXPORT void
 sdeclcd_hbar (Driver *drvthis, int x, int y, int len, int promille, int options)
 {
   PrivateData *p = drvthis->private_data;
   sdeclcd_init_hbar(drvthis);
   lib_hbar_static(drvthis, x, y, len, promille, options, p->cellwidth, 1);
+}
+
+/*
+ * Draws a vertical bar from bottom to top. Taken from lcterm.c
+*/
+MODULE_EXPORT void
+sdeclcd_vbar (Driver *drvthis, int x, int y, int len, int promille, int options)
+{
+  PrivateData *p = drvthis->private_data;
+  sdeclcd_init_vbar(drvthis);
+  lib_vbar_static(drvthis, x, y, len, promille, options, p->cellheight, -1);
+}
+
+
+/**
+ * Write a big number to the screen.
+ * \param drvthis  Pointer to driver structure.
+ * \param x        Horizontal character position (column).
+ * \param num      Character to write (0 - 10 with 10 representing ':')
+ */
+MODULE_EXPORT void sdeclcd_num(Driver *drvthis, int x, int num)
+{
+  PrivateData *p = (PrivateData *) drvthis->private_data;
+
+  static char bignum_map[11][2][2] = {
+    { /* 0: */
+      {0,1},
+      {2,3},
+    },
+    { /* 1: */
+      {32,4},
+      {32,4},
+    },
+    { /* 2: */
+      {5,6},
+      {7,5},
+    },
+    { /* 3: */
+      {5,6},
+      {5,6},
+    },
+    { /* 4: */
+      {2,3},
+      {32,4},
+    },
+    { /* 5: */
+      {7,5},
+      {5,6},
+    },
+    { /* 6: */
+      {7,5},
+      {7,6},
+    },
+    { /* 7: */
+      {0,1},
+      {32,4},
+    },
+    { /* 8: */
+      {7,6},
+      {7,6},
+    },
+    { /* 9: */
+      {7,6},
+      {5,6},
+    },
+    { /* colon: */
+      {'-','-'},
+      {'-','-'},
+    }};
+
+  sdeclcd_init_num(drvthis);
+
+  if ((num < 0) || (num > 10))
+    return;
+  if (num == 10) 
+    return; 
+    int x2, y2;
+
+//    sdeclcd_init_num(drvthis);
+
+    for (x2 = 0; x2 < 2; x2++) {
+      for (y2 = 0; y2 < 2; y2++) {
+	sdeclcd_chr(drvthis, x+x2, y2+1, bignum_map[num][y2][x2]);
+//	sdeclcd_chr(drvthis, x+x2, y2+1, '0'+num);
+      }	
+//      if (num == 10)
+//	x2 = 2; /* =break, for colon only */
+    }
+}
+
+/*
+ * Get keyboard and return key name . jj.Goessens nov 2009
+*/
+
+MODULE_EXPORT const char *sdeclcd_get_key(Driver *drvthis)
+{
+	PrivateData *p = (PrivateData *) drvthis->private_data;
+	unsigned int readval;
+	char *keystr = NULL;
+	
+	// check elapsed time for backlight
+	if (p->bklgt_timer != 0)
+	    {
+	    if ((time(NULL)-p->bklgt_lasttime) > p->bklgt_timer) p->bklgt=0;
+	    else p->bklgt=1;
+	    port_out(p->port+2, ((port_in(p->port+2) & 0xFE) | (0x00 + (1 ^ p->bklgt))));
+	    }
+	
+	// read keyboard status
+	readval = (port_in(p->port+1));
+	
+	// mask usefull bits
+	readval = (readval & 0x68) ;
+	
+	// check if bkd change
+	if (readval != p->lastkbd)
+	    {
+	    // reset elepsed time counter
+            p->bklgt_lasttime=time(NULL);
+    
+	    // return value according keys
+	    switch (readval) 
+		{
+		// Up
+		case 0x48 : keystr="Up";
+			    break;
+		// Right
+		case 0x60 : keystr="Right";
+			    break;
+		// Down
+		case 0x40 : keystr="Down";
+			    break;
+		// Left
+		case 0x68 : keystr="Left";
+			    break;
+			    
+		default   : keystr=NULL;
+			    break;
+		}
+            p->lastkbd=readval;
+            
+	    }
+	return keystr;
 }
 
