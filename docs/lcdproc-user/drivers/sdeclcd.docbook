@@ -1,0 +1,6 @@
+<sect1 id="sdeclcd-howto">
+<title>The sdeclcd Driver</title>
+
+<para>
+This driver integrates the LCD display of Watchguard Firebox firewall appliances into the LCDproc framework. The display is made by SDEC, model number LMC-S2D20-01, and is interfaced through the parallel port.
+</para>
