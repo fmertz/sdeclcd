@@ -1,16 +1,16 @@
-/*
- *  This is the LCDproc driver for SDEC LCD Devices, 
- *  like the one found in the FireBox firewall device.
+/*-
+ * This is the LCDproc driver for SDEC LCD Devices.
+ * They are found in the Watchguard FireBox firewall appliances.
+ * They are interfaced through the parallel port.
  *
- *  Copyright(C) 2008 Jayson Kubilis (jekubili AT ktechs dot net)
+ * The code is based on the spec file LMC-S2D20-01.pdf,
+ * a technical hardware and programming guide for this LCD.
  *
- *    based on GPL'ed code:
- *
- *       + files from LCDproc source tree
+ *  Copyright(C) 2011 Francois Mertz  (fireboxled@gmail.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation; either version 3 of the License, or
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -24,965 +24,679 @@
  *
  *  Thanks for playing!
  *
- * version 1.01 : adding keyboard support for firebox X series
- * JJ Goessens mailto:jj@goessens.dyndns.org
+ * Contributors:
  *
- * version 1.02 : adding backlight timer 
- * uses new variable in LCDd.conf : Backlight_Timer=<seconds>
- * if not declared or =0, no timer activated
+ * Jayson Kubilis (jekubili@ktechs.net):
+ *		Initial version
  *
- * version 1.03 : added vbar support & bigclock support
- * heatbeat does not work anymore due to number of user definable chars
+ * JJ Goessens (jj@goessens.dyndns.org):
+ *		Initial Keyboard support
+ *		Backlight wiring
  *
- * JJ Goessens mailto:jj@goessens.dyndns.org
- *
- * version 1.04 : changed some variables from signed to unsigned to remove compile time warnings.
- * Stephenw10
- *
- * version 1.05 : Reworked keyboard to add support for X-e boxes. fmertz dec 2011
- *
- *
- *
+ * stephenw10:
+ *		Additional keyboard codes
  */
-
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+#ifdef HAVE_STDLIB_H
 #include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <termios.h>
-#include <fcntl.h>
+#endif
+#ifdef HAVE_STRING_H
 #include <string.h>
-#include <sys/errno.h>
-//#include <sys/io.h>
+#endif
 #include <time.h>
 #include "port.h"
+#include "lpt-port.h"
 #include "timing.h"
-
-#ifdef HAVE_CONFIG_H
-# include "config.h"
-#endif
-
-//#include "shared/str.h"
-//#include "str.h"
 #include "lcd.h"
 #include "sdeclcd.h"
 #include "report.h"
 #include "adv_bignum.h"
-
-#include <time.h>
-
-//  #include "lcterm.h"
 #include "lcd_lib.h"
 
-#ifndef LPT_DEFAULT
-#define LPT_DEFAULT 0x378
-#endif
-
-#ifndef NUM_CCs
-#define NUM_CCs 8
-#endif
+/**
+ * The following definitions are specific for the SDEC LCD device,
+ * and the way it is wired in the Watchguard Firebox. There is a
+ * mapping between the parallel port Control register and the
+ * LCD control lines, as follows: (see lpt-port.h for defs)
+ *
+ */
+#define SDEC_BACKLIGHT	STRB	/* Strobe, bit 0			*/
+#define SDEC_ENABLE	LF	/*Linefeed, bit 			*/
+#define SDEC_CONTRAST	INIT	/*Init, bit 2 <--FIXME, Untested	*/
+#define SDEC_REG_SEL	SEL	/*Select Printer, bit 3			*/
 
 /**
- * Define the various modes we support for in-memory character storage
+ * The following definitions are specific for the SDEC LCD device
+ *
  */
-typedef enum
-{
-  CCMODE_STANDARD,    /* only char 0 is used for heartbeat */
-  CCMODE_VBAR,        
-  CCMODE_HBAR,        
-  CCMODE_BIGNUM       
-} CCMode;
+#define SDEC_DISP_W	20	/* Display Width			*/
+#define SDEC_DISP_H	2	/* Display Height			*/
+#define SDEC_ADD_LINE1	0x80	/* Address of beginning of Line 1	*/
+#define SDEC_ADD_LINE2	0xC0	/* Address of beginning of Line 2	*/
+#define SDEC_CELL_W	5	/* Characer cell Width			*/
+#define SDEC_CELL_H	8	/* Character cell Height		*/
+#define SDEC_NUM_CC	8	/* Number of Custom Characters		*/
+#define SDEC_IDENT	"SDEC LCD Driver with Keyboard, Version " VERSION
 
+/**
+ * Instruction Set for the SDEC LCD device
+ * 
+ */
+#define SDEC_FN_CLEAR_DISPLAY	0x01	/* Clears the LCD		*/
+#define SDEC_FN_RETURN_HOME	0x02	/* Returns cursor home		*/
+#define SDEC_FN_SET_ENTRY_MODE	0x04	/* Sets Entry Mode		*/
+#define SDEC_OPT_INCREMENT	0x02	/* Cursor moves right		*/
+#define SDEC_FN_DISPLAY		0x08	/* Display:			*/
+#define SDEC_OPT_DISPLAY_ON	0x04	/* Display ON option		*/
+#define SDEC_OPT_CURSOR_ON	0x02	/* Cursor ON option		*/
+#define SDEC_OPT_BLINK_ON	0x01	/* Blinking Cursor option	*/
+#define SDEC_FN_CURSOR_R	0x14	/* Move cursor right 1 position	*/
+#define SDEC_FN_CURSOR_L	0x10	/* Move cursor left 1 position	*/
+#define SDEC_FN_FUNCTION_SET	0x20	/* Function Set:		*/
+#define SDEC_OPT_8_BIT		0x10	/* 8bit option (vs 4 bit)	*/
+#define SDEC_OPT_2_LINES	0x08	/* 2 Lines (vs 1 Line)		*/
+#define SDEC_OPT_5X10		0x04	/* Each char is 5x10 (vs 5x7)	*/
+#define SDEC_FN_CG_ADD		0x40	/* Set Custom Char address	*/
+#define SDEC_FN_DD_ADD		0x80	/* Set Display address	(cursor)*/
+#define SDEC_DATA 	SDEC_REG_SEL	/* For data, RS is ON		*/
+#define SDEC_EXEC		0x00	/* For exec, RS is OFF		*/
+#define SDEC_HOLD		40	/* Min exec time in micro sec	*/
+#define SDEC_HOLD_ENABLE	1	/* Min time to hold ENABLE in micro
+					 * sec, should be 450 nano sec	*/
+
+/**
+ * Basic PC parallel port constants. At this point, the driver only supports a
+ * SDEC LCD device on port 0, as all Fireboxes seem to be wired that way.
+ *
+ *	http://en.wikipedia.org/wiki/Parallel_port
+ *
+ */
+#define LPT_PORT_0		0x0378
+#define LPT_PORT_1		0x0278
+#define LPT_PORT_2		0x03BC
+
+#define LPT_DEFAULT 		LPT_PORT_0
+#define LPT_STATUS		(LPT_DEFAULT+1)
+#define LPT_CONTROL		(LPT_DEFAULT+2)
+#define LPT_CTRL_MASK		OUTMASK	/* Control port hardware inversion */
+#define LPT_STUS_MASK		(SELIN|PAPEREND|ACK|BUSY|FAULT)
+				/* Bits actually used by Status port	*/
+
+/**
+ * Driver implementation choices
+ *
+ * Heart beat location on screen, and corresponding address, char,
+ * and backlight timeout
+ */
+#define SDEC_HB_LOC		(SDEC_DISP_W-1)		
+#define SDEC_HB_ADD		(SDEC_ADD_LINE1+SDEC_HB_LOC)
+#define SDEC_HB_CHAR		':'
+#define SDEC_BKLT_DFT		30
+
+/**
+ * This structure will hold data private to this Driver
+ * As the driver is implemented as a Shared Library, persistent data needs to
+ * be put in a dynamically allocated struct. Otherwise, all instances of the 
+ * library would share the same values.
+ *
+ */
 typedef struct driver_private_data {
-        CCMode ccmode;           /* custom character mode for current display */
-        CCMode last_ccmode;      /* custom character set that is loaded in the display */
-	unsigned int port;       /* port that we talk with the device */
-	unsigned int bklgt;      /* backlight is on or off */
-	unsigned int lastkbd;	 /* last keyboard status to detect changes */
-	unsigned int bklgt_timer;	 /* setup for backlight timer */
-	time_t	bklgt_lasttime;	 /* last time for backlight timer */
-	unsigned int charattrib; 
-	unsigned int flags;      /* not used */
-	unsigned int cellwidth;  /* Cell Width */
-	unsigned int cellheight; /* Cell Height */
-	unsigned int dispwidth;  /* Display Width */
-	unsigned int dispheight; /* Display Height */
-        unsigned int lastcharloc; /*Last memory location we wrote to the LCD. */
-	char *framebuf;           /* Frame buffer as written to the LCD */
-	char *framenew;           /* Frame buffer to be written to the LCD */
-        char *frameicon;          /* Frame buffer for custom icons stored in CGMemory */
+	CGmode ccmode;		/* Current custom character mode	*/
+	unsigned char bklgt;    /* Backlight status			*/
+	unsigned char lastkbd;	/* Last keyboard status			*/
+	unsigned char hb_stus;	/* Heart Beat status			*/
+	unsigned bklgt_timer;	/* Seconds to keep the backlight on	*/
+	time_t	bklgt_lasttime;	/* When back light was turned on	*/
+	time_t	hrbt_lasttime;	/* When heart beat was output		*/
+	char *framebuf;         /* Frame buffer				*/
+	char *framelcd;         /* Frame buffer on the LCD		*/
+	char *vbar_cg;		/* Vertical Bar bitmaps			*/
+	char *hbar_cg;		/* Horizontal Bar bitmaps		*/
+	char *bignum_cg;	/* Big Numbers bitmaps			*/
 } PrivateData;
 
+/**
+ * Variables assisting the driver loader
+ *
+ */
 MODULE_EXPORT char *api_version = API_VERSION;
-MODULE_EXPORT int stay_in_foreground = 0;
-MODULE_EXPORT int supports_multiple = 0;
-MODULE_EXPORT char *symbol_prefix = "sdeclcd_";
-
-// Notes: 
-//    -- 0001 Strobe bit, Control bit 0 = LCD Backlight (0: on 1: off)
-//    -- 0010 Autofeed  , Control bit 1 = Enable Signal - LCD Do something with whats in mem
-//    -- 0100 Unknown, maybe write?
-//    -- 1000 Select In , Control bit 3 = Register Select - SELECT Function or data in memory
-
+MODULE_EXPORT int stay_in_foreground = 0;	/* Foreground is not required */
+MODULE_EXPORT int supports_multiple = 0;	/* No support for mult. LCDs  */
+MODULE_EXPORT char *symbol_prefix = "sdeclcd_";	/* Prefix for API entries     */
+ 
 /**
- * write data to the LCD. This is bits 8 - 0 on the data port.
+ * Main LCD control routine
+ * \param register_select	What to set the Register Select line to
+ * \param backlight		What to set the Backlight line to
+ * \param data			Data to send to LCD (char or instruction)
+ * \param usec			Wait time in micro seconds
+ *
+ * This is the basic routine that controls the LCD. It interfaces with the
+ * parallel ports and contains the logic for flipping and holding the lines
+ * as required. It tries and be comprehensive enough to avoid spreading
+ * LPT port logic all over the code.
+ *
+ * The Register Select line determines if an output is to be understood as an
+ * instruction, or as data to be displayed.
+ * The Backlight line controls the backlight in a direct manner.
+ *
+ * The sequence is:
+ *		Bring Enable up
+ *		Output the data (command or character)
+ *		Hold Enable for 450 nano sec (.45 micro sec)
+ *		Bring Enable down
+ *		Wait for the LCD to execute the command, typically 40 micro sec
+ *
+ * Take into account the hardware inversion of some control port bits.
+ *
  */
-void
-sdeclcd_writedata (PrivateData *p, char data) {
-    
-    //PrivateData *p = (PrivateData *) drvthis->private_data;
-
-    // We don't care about high bits; so we ignore those with an 0xF0 &
-    // The LCD executes commands using the second bit on the control port, not strobe bit like most.
-    // this is likely due to the specific cabling of the Firebox LCD.
-    // Backlight is controlled by the strobe control bit. See notes above.
-
-    port_out(p->port+2, ((port_in(p->port+2) & 0xF0) | (0x00 + (1 ^ p->bklgt))));
-    port_out(p->port, data);
-    port_out(p->port+2, ((port_in(p->port+2) & 0xF0) | (0x02 + (1 ^ p->bklgt))));
-    timing_uPause(40);    
+static inline void
+_sdec_control_wait(unsigned char register_select, unsigned char backlight,
+                   unsigned char data, int usec)
+{
+	port_out(LPT_CONTROL,
+	         (register_select | backlight | SDEC_ENABLE) ^ LPT_CTRL_MASK);
+	port_out(LPT_DEFAULT, data);
+	timing_uPause(SDEC_HOLD_ENABLE);
+	port_out(LPT_CONTROL, (register_select | backlight) ^ LPT_CTRL_MASK);
+	timing_uPause(usec);
 }
 
 /**
- * Issue a command to the LCD.  Difference from above is we change the Select In/Register select bit on the LCD display
+ * These macros are meant to be used by the driver code. They are wrappers
+ * around the low level routine, and capture the Register Select logic.
+ *
  */
-void
-sdeclcd_writecmd (PrivateData *p, char cmd) {
-	
-    //PrivateData *p = (PrivateData *) drvthis->private_data;
+#define sdec_write(a,b) _sdec_control_wait(SDEC_DATA, b, a, SDEC_HOLD)
+#define sdec_exec(a,b)	_sdec_control_wait(SDEC_EXEC, b, a, SDEC_HOLD)
+#define sdec_exec_wait(a,b) _sdec_control_wait(SDEC_EXEC, 0, a,b)
 
-    port_out(p->port+2, ((port_in(p->port+2) & 0xF0) | (0x08 + (1 ^ p->bklgt)))); //c8      
-    port_out(p->port, cmd);
-    port_out(p->port+2, ((port_in(p->port+2) & 0xF0) | (0x0a + (1 ^ p->bklgt)))); //ca
-    timing_uPause(40);	
+/**
+ * This is the mandatory initialization sequence for the LCD, as per the SDEC
+ * programming guide. Note the required execution times.
+ *
+ */
+static void 
+sdec_init()
+{
+	/* Mandatory reset sequence				*/
+	sdec_exec_wait(SDEC_FN_FUNCTION_SET | SDEC_OPT_8_BIT, 15000);
+	sdec_exec_wait(SDEC_FN_FUNCTION_SET | SDEC_OPT_8_BIT, 4100);
+	sdec_exec_wait(SDEC_FN_FUNCTION_SET | SDEC_OPT_8_BIT, 100);
+	sdec_exec_wait(SDEC_FN_FUNCTION_SET | SDEC_OPT_8_BIT | SDEC_OPT_2_LINES,
+	               100);
+	sdec_exec_wait(SDEC_FN_DISPLAY, 40);
+	sdec_exec_wait(SDEC_FN_CLEAR_DISPLAY, 1640);
+	sdec_exec_wait(SDEC_FN_SET_ENTRY_MODE | SDEC_OPT_INCREMENT, 40);
+
+	/* Additional command 					*/
+	sdec_exec(SDEC_FN_DISPLAY | SDEC_OPT_DISPLAY_ON, 0);
 }
 
 /**
- * Write a custom icon to the LCDs CGRam
- */
-void
-sdeclcd_writecgram(PrivateData *p, int n, unsigned char data[]) {
-
-    //report(RPT_DEBUG, "%s: writing GC_RAM data", "sdeclcd");
-    
-    // 0x40 - this is the command to set a char in CGRAM
-    // Specific locations for each CG Storage area is 8 bits apart.
-
-    int memaddr = 0x40+(n*8);
-    int i = 0;
-
-    if (n >= NUM_CCs)
-        return;
-    if (!data)
-        return;
-
-    for (i=0; i<p->cellheight; i++) {
-        sdeclcd_writecmd(p, memaddr+i);
-        sdeclcd_writedata(p, data[i]);
-    }
-}
-
-/**
- * Write something to the LCD. Uses the above functions.
- * Performance is improved below using the theroy that if we write something to the LCD
- * chances are that we will write to the next cell on the right. thus the mode we put the lcd
- * in is to auto-move curor to the right. We check to see if the next address is one to the right,
- * if it is we skip the step to issue a curor move command. Almost 2x performance :)
- */
-void
-sdeclcd_writeout(PrivateData *p, int x, int y, char data) {
-
-    int lcdmemreg = 0x80+(0x40*y)+x;
-
-    if (p->lastcharloc != lcdmemreg-1)
-       sdeclcd_writecmd(p, lcdmemreg);
-    p->lastcharloc = lcdmemreg;
-    sdeclcd_writedata(p, data);
-
-}
-
-/**
- * This is all of the commands to init/reset the display. This is only run once the driver is loaded.
- */
-void
-sdeclcd_displayinit(PrivateData *p) {
-
-    char init[9];
-    init[0] = 0x30; //Function set
-    init[1] = 0x30; //Function set
-    init[2] = 0x30; //Function set
-    init[3] = 0x38; // Function set. We setup the display length and bit mode we use (8 or 4) 0011|1000
-    init[4] = 0x08; // Display on 0000|1000
-    init[5] = 0x01; // Clear LCD
-    init[6] = 0x06; // set entry mode here. 0000|0110
-    init[7] = 0x0c; // Display on and change Cursor modes 0000|1100
-    init[8] = 0x14; // 0001|0100
-
-    int c;
-    for (c=0;c<9;c++) {
-      sdeclcd_writecmd(p, init[c]);
-      timing_uPause(460); //we need to slow down for init just a bit.
-    }
-
-}
-
-/**
- * Initialize var's alloc memory, setup pointers and init display
+ * API:
  */
 MODULE_EXPORT int 
-sdeclcd_init (Driver *drvthis)
+sdeclcd_init(Driver *drvthis)
 {
-    PrivateData *p;
+	PrivateData *p;
+	int i, j;
+	/* Compact version of big num character bitmaps			*
+	 * Stack each line separately to visualize each char.		*/
+	static char bignum_bitmaps []= {
+	b___XXXX,b__XX___,b__XX___,b__XX___,b__XX___,b__XX___,b__XX___,b__XX___,
+	b__XXXX_,b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,
+	b__XX___,b__XX___,b__XX___,b__XX___,b__XX___,b__XX___,b__XX___,b___XXXX,
+	b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,b__XXXX_,
+	b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,
+	b__XXXXX,b_______,b_______,b_______,b_______,b_______,b_______,b__XXXXX,
+	b__XXXX_,b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,b_____XX,b__XXXX_,
+	b___XXXX,b__XX___,b__XX___,b__XX___,b__XX___,b__XX___,b__XX___,b___XXXX
+	};
 
-    /* Allocate and store private data */
-    p = (PrivateData *) calloc(1, sizeof(PrivateData));
-    if (p == NULL)
-   	  return -1;
-    if (drvthis->store_private_ptr(drvthis, p))
-          return -1;
+	/* Allocate and store private data */
+	p = (PrivateData *) malloc(sizeof(PrivateData));
+	if (p == NULL)
+		return -1;
+	if (drvthis->store_private_ptr(drvthis, p))
+		return -1;
 
-    /* Initialize private data and read config */
-    p->ccmode = p->last_ccmode = CCMODE_STANDARD;
-    p->port = drvthis->config_get_int(drvthis->name, "Port", 0, LPT_DEFAULT);
-    p->bklgt = drvthis->config_get_bool(drvthis->name, "BackLight", 0, 0);
-    p->bklgt_timer = drvthis->config_get_int(drvthis->name, "BackLight_Timer", 0, 30);
-    p->bklgt_lasttime=time(NULL);
-    p->flags = 0;
-    p->cellwidth = 5;
-    p->cellheight = 8;
-    p->dispwidth = 20;
-    p->dispheight = 2;
-    p->lastcharloc = 0x80;
-    p->framebuf = (char *) calloc(p->dispwidth * p->dispheight, sizeof(char)); // Current LCD display
-    p->framenew = (char *) calloc(p->dispwidth * p->dispheight, sizeof(char)); // Updates prior to flush to LCD display (new data)
-    p->frameicon = (char *) calloc(NUM_CCs*p->cellheight, sizeof(char));
-    memset(p->framebuf, ' ', p->dispwidth * p->dispheight);
-    memset(p->framenew, ' ', p->dispwidth * p->dispheight);
-    memset(p->frameicon, ' ', NUM_CCs);
+	/* Initialize private data and read config */
+	p->ccmode = standard;
+	p->bklgt = BACKLIGHT_ON;
+	p->bklgt_timer = SDEC_BKLT_DFT;
+	p->bklgt_lasttime = time(NULL);
+	p->hrbt_lasttime = time(NULL);
+	p->hb_stus = HEARTBEAT_OFF;
+	p->framebuf = (char *)malloc(SDEC_DISP_W*SDEC_DISP_H);
+	p->framelcd = (char *)malloc(SDEC_DISP_W*SDEC_DISP_H);
+	p->vbar_cg = (char *)malloc(SDEC_CELL_H*SDEC_NUM_CC);
+	p->hbar_cg = (char *)malloc(SDEC_CELL_H*SDEC_NUM_CC);
+	p->bignum_cg = (char *)bignum_bitmaps;
 	  
-    if (p->framebuf == NULL || p->framenew == NULL) {
-      report(RPT_ERR, "%s: unable to allocate framebuffer", drvthis->name);
-      return -1;
-    }
+	if (NULL == p->framebuf || NULL == p->framelcd || 
+		NULL == p->vbar_cg || NULL == p->hbar_cg) {
+		report(RPT_ERR, "%s: unable to allocate framebuffer",
+		       drvthis->name);
+		return -1;
+	}
 
-    // Initialize the Port
-    if (port_access_multiple(p->port,3)) {
-      report(RPT_ERR, "%s: cannot get IO-permission for 0x%03X! Are we running as root?", drvthis->name, p->port);
-      return -1;
-    }
+	memset(p->framebuf, ' ', SDEC_DISP_W*SDEC_DISP_H);
+	memset(p->framelcd, ' ', SDEC_DISP_W*SDEC_DISP_H);
 
-    sdeclcd_displayinit(p);
+	//Prepare custom character bitmaps: vbar, hbar
+	for (i=0;i<SDEC_NUM_CC;i++)
+		for (j=0;j<SDEC_CELL_H;j++) {
+			//Visualize this:
+			p->vbar_cg[i * SDEC_CELL_H + j]=(j <= i) ? 0xFF :0;
+			p->hbar_cg[i * SDEC_CELL_H + j]=(~(0x0F >> i)) & 0x1F;
+		}
+	
+	p->bignum_cg = bignum_bitmaps;
 
+	//Initializes the scheduler, see timing.h
+	timing_init();
 
-    return 0;
-    
+	// Initialize access to the ports
+	if (port_access_multiple(LPT_DEFAULT,3)) {
+		report(RPT_ERR, 
+			"%s: cannot get IO-permission for 0x%03X! Are we root?",
+			drvthis->name, LPT_DEFAULT);
+		return -1;
+	}
+	sdec_init ();
+	return 0;
 }
 
 /**
- * Free memory and go home for the day.
+ * API:
  */
 MODULE_EXPORT void
 sdeclcd_close(Driver *drvthis)
 {
 	PrivateData *p = (PrivateData *) drvthis->private_data;
 
-    if (p != NULL) {
-        if (p->framebuf)
-            free(p->framebuf);
+	if (p) {
+		if (p->framebuf)
+			free(p->framebuf);
+		if (p->framelcd)
+			free(p->framelcd);
+		if (p->vbar_cg)
+			free(p->vbar_cg);
+		if (p->hbar_cg)
+			free(p->hbar_cg);
+	free(p);
+	}
 
-        if (p->framenew)
-            free(p->framenew);
-
-        if (p->frameicon)
-            free(p->frameicon);
-
-        free(p);
-    }
-	
-    if (!port_deny_multiple(p->port,3)) {
-        report(RPT_ERR, "%s: cannot get IO-permission for 0x%03X! Are we running as root?", drvthis->name, p->port);
-    }
-  	
-    drvthis->store_private_ptr(drvthis, NULL);
-
+	if (!port_deny_multiple(LPT_DEFAULT,3)) {
+		report(RPT_ERR, 
+			"%s: cannot get IO-permission for 0x%03X! Are we root?",
+			drvthis->name, LPT_DEFAULT);
+	}
+	drvthis->store_private_ptr(drvthis, NULL);
 }
 
-
-
-
-
 /**
- * Returns the display width
+ * API:
  */
 MODULE_EXPORT int
-sdeclcd_width (Driver *drvthis) {
-	
-	PrivateData *p = (PrivateData *) drvthis->private_data;
-	
-	return p->dispwidth;
-
-}
+sdeclcd_width(Driver *drvthis) { return SDEC_DISP_W; }
 
 /**
- * Returns the display height
+ * API:
  */
 MODULE_EXPORT int
-sdeclcd_height (Driver *drvthis) {
-	
-	PrivateData *p = (PrivateData *) drvthis->private_data;
-	
-	return p->dispheight;
-	
-}
+sdeclcd_height(Driver *drvthis) { return SDEC_DISP_H; }
 
 /**
- * Flush the contents of the framebuffer out to the lcd and set the lcd's 'current' framebuffer equal
- * to that of the flushed FB.
+ * API: Flush the contents of the framebuffer out to the LCD
+ * 
+ * The idea is that we only write to the LCD what we must. Therefore we compare
+ * the content of the framebuffer to the content of the LCD as we last wrote it
+ * and write when there is a diff. Writing involves setting the cursor (at a
+ * cost of 40 micro sec), and then write the framebuffer char (another 40 micro
+ * sec). As the Entry Mode was set to auto-increment the cursor on every write,
+ * we only set the cursor when we must.
+ *
  */
 MODULE_EXPORT void
-sdeclcd_flush (Driver *drvthis) {
-    PrivateData *p = (PrivateData *) drvthis->private_data;
-    int c,l;
-    c = 0;
-    l = (p->dispwidth * p->dispheight);
+sdeclcd_flush(Driver *drvthis) {
+	PrivateData *p = (PrivateData *) drvthis->private_data;
+	int i, c;
+	unsigned char addr;
 
-    for(c=0; c<l; c++) {
-      if(p->framebuf[c] != p->framenew[c]) {
-        //Need to update this location onto lcd.
-        // Calculate x y cord's
-        p->framebuf[c] = p->framenew[c];
-        sdeclcd_writeout(p, (c%(p->dispwidth)), (c/(p->dispwidth)), p->framenew[c]);
+	for(i=0, c=-1; i < SDEC_DISP_H * SDEC_DISP_W; i++) {
+		if(p->framelcd[i] == p->framebuf[i])
+			continue;
+		//Found diff: cursor ok?
+		if (c != i) {
+			//Set cursor address to where the change is
+			addr=(i < SDEC_DISP_W) ?
+				(SDEC_ADD_LINE1 + i) : 
+				(SDEC_ADD_LINE2 + i - SDEC_DISP_W);
+			//This costs 40 micro sec.
+			sdec_exec(SDEC_FN_DD_ADD | addr, p->bklgt);
+			c = i;
+		}
+		//Write to LCD, 40 micro sec
+		sdec_write(p->framebuf[i], p->bklgt);
+		//LCD Entry Mode auto increments cursor, so keep track
+		if (SDEC_DISP_W - 1 == c++)
+			c = -1;	//Force cursor set
+        p->framelcd[i] = p->framebuf[i];
       }
-    }
 }
 
 /**
- * Write an string to the LCD
+ * API:
  */
 MODULE_EXPORT void
-sdeclcd_string (Driver *drvthis, int x, int y, char string[]) {
-  
-  PrivateData *p = (PrivateData *) drvthis->private_data;
-	int i;
+sdeclcd_string(Driver *drvthis, int x, int y, char string[])
+{
+	PrivateData *p = (PrivateData *) drvthis->private_data;
+	int l;
 
-	x--;  // Convert 1-based coords to 0-based
-	y--;
-
-	if ((y < 0) || (y >= p->dispheight))
+	if (y < 1 || y > SDEC_DISP_H || x < 1 || x > SDEC_DISP_W)
 		return;
 
-	for (i = 0; (string[i] != '\0') && (x < p->dispwidth); i++, x++) {
-		if (x >= 0)	// no write left of left border
-			p->framenew[(y * p->dispwidth) + x] = string[i];
+	l = strlen(string);
+	memcpy(p->framebuf + (x - 1)+(y - 1) * SDEC_DISP_W, string,
+	       (l > SDEC_DISP_W - y - 1) ? SDEC_DISP_W - y - 1: l);
+}
+
+/**
+ * API:
+ */
+MODULE_EXPORT void
+sdeclcd_chr(Driver *drvthis, int x, int y, char c)
+{
+	PrivateData *p = (PrivateData *) drvthis->private_data;
+	
+	if (y < 1 || y > SDEC_DISP_H || x < 1 || x > SDEC_DISP_W)
+		return;
+	p->framebuf[(y - 1) * SDEC_DISP_W + x - 1] = c;
+}
+
+/**
+ * API:
+ */
+MODULE_EXPORT void
+sdeclcd_clear(Driver *drvthis)
+{
+	PrivateData *p = (PrivateData *) drvthis->private_data;
+	
+	memset(p->framebuf, ' ', SDEC_DISP_W*SDEC_DISP_H);
+}
+
+/**
+ * API:
+ */
+MODULE_EXPORT int
+sdeclcd_cellwidth(Driver *drvthis) { return SDEC_CELL_W; }
+
+/**
+ * API:
+ */
+MODULE_EXPORT int
+sdeclcd_cellheight(Driver *drvthis) { return SDEC_CELL_H; }
+
+/**
+ * API:
+ */
+MODULE_EXPORT int
+sdeclcd_get_free_char(Driver *drvthis) { return SDEC_NUM_CC; }
+
+/**
+ * API:
+ * Implementation routine for Icons. The server asks for an icon by code, and
+ * this routine does the job. Simply updates the frame buffer with a suitable
+ * char based on the icon code requested. As the LCD has its own character
+ * map with latin, chinese, greek and extra symbols, it is only a matter of
+ * mapping to some characted on the LCD that (loosely) resembles the
+ * requested code. This implementation does NOT use custom characters.
+ * 
+ */
+MODULE_EXPORT int
+sdeclcd_icon(Driver *drvthis, int x, int y, int icon_code)
+{
+	char icon_char;
+	
+	switch (icon_code) {
+		case ICON_BLOCK_FILLED:		icon_char = 0xFF; break;
+ 		case ICON_ARROW_UP:		icon_char = '|';  break;
+ 		case ICON_ARROW_DOWN:		icon_char = '|';  break;
+ 		case ICON_ARROW_LEFT:		icon_char = 0x7F; break;
+ 		case ICON_ARROW_RIGHT:		icon_char = 0x7E; break;
+ 		case ICON_CHECKBOX_OFF:		icon_char = 0xDB; break;
+ 		case ICON_CHECKBOX_ON:		icon_char = 0xE8; break;
+ 		case ICON_CHECKBOX_GRAY:	icon_char = 0xA5; break;
+ 		case ICON_SELECTOR_AT_LEFT:	icon_char = 0x7E; break;
+ 		case ICON_SELECTOR_AT_RIGHT:	icon_char = 0x7F; break;
+ 		case ICON_ELLIPSIS:		icon_char = 0xD0; break;
+		default:
+			return -1;
 	}
-        
+	//Update frame buffer
+	sdeclcd_chr(drvthis, x, y, icon_char);
+	return 0;
 }
 
-
 /**
- * Write a character to the LCD at x,y
+ * API:
+ * Implements heart beat. This routine implements a visual cue that the whole
+ * lcdproc server/driver and host are still alive. We could update the frame
+ * buffer, but we chose to go straight to the hardware instead. 
+ * We do NOT rely on custom characters for this. Instead, we simply alternate
+ * the frame buffer value with a special char in the corner. This way, we keep 
+ * the character under the heart beat somewhat visible. After all, this is only
+ * 20x2. This is called by the server very often, so we pace ourselves, and
+ * beat the heart on our schedule.
+ * OPTIONAL
  */
 MODULE_EXPORT void
-sdeclcd_chr (Driver *drvthis, int x, int y, char c) {
-  
-  PrivateData *p = (PrivateData *) drvthis->private_data;
-	
-	y--;
-	x--;
-        report(RPT_DEBUG, "%s: Writing char %c at %i %i",drvthis->name,c,x,y);
-
-	if ((x >= 0) && (y >= 0) && (x < p->dispwidth) && (y < p->dispheight))
-		p->framenew[(y * p->dispwidth) + x] = c;
-
-}
-
-/**
- * Clear the framebuffer, clears the display on next write.
- * We could use the hardware function which will provide better performance.
- */
-MODULE_EXPORT void
-sdeclcd_clear (Driver *drvthis) {
-
-  PrivateData *p = (PrivateData *) drvthis->private_data;
-	
-  memset(p->framenew, ' ', p->dispwidth * p->dispheight);
-	
-}
-
-/**
- * width of a single cell in the LCD
- */
-MODULE_EXPORT int
-sdeclcd_cellwidth (Driver *drvthis)
-{
-    PrivateData *p = drvthis->private_data;
-    return p->cellwidth;
-}
-
-/**
- * height of a single cell in the LCD
- */
-MODULE_EXPORT int
-sdeclcd_cellheight (Driver *drvthis)
-{
-    PrivateData *p = drvthis->private_data;
-    return p->cellheight;
-}
-
-/**
- * Sets a custom char via pixel on/off bitmaps.
- */
-MODULE_EXPORT void
-sdeclcd_set_char (Driver *drvthis, int n, unsigned char *dat)
+sdeclcd_heartbeat(Driver * drvthis, int type)
 {
 	PrivateData *p = drvthis->private_data;
-	unsigned char out[p->cellheight];
-	unsigned char mask = (1 << p->cellwidth) - 1;
-	int row;
-        int cachestale = 0;
 
-	if ((n < 0) || (n >= NUM_CCs))
+	if (time(NULL) <= p->hrbt_lasttime)
 		return;
-	if (!dat)
-		return;
+	//Move cursor
+	sdec_exec(SDEC_FN_DD_ADD | SDEC_HB_ADD, p->bklgt);
+	//Write
+	if (HEARTBEAT_ON == type && HEARTBEAT_OFF == p->hb_stus)
+		sdec_write(SDEC_HB_CHAR, p->bklgt);
+	else
+		sdec_write(p->framelcd[SDEC_HB_LOC], p->bklgt);
+	//Toggle status
+	p->hb_stus = (HEARTBEAT_ON == p->hb_stus) ?
+			HEARTBEAT_OFF : HEARTBEAT_ON;
+	//Save time
+	p->hrbt_lasttime = time(NULL);
+}
 
-	for (row = 0; row < p->cellheight; row++) {
-		out[row] = dat[row] & mask;
-                if (p->frameicon[(n*p->cellheight)+row] != (dat[row] & mask)) {
-                    cachestale = 1;
-                    p->frameicon[(n*p->cellheight)+row] = dat[row] & mask;
-                }
+/*
+ * API:
+*/
+MODULE_EXPORT void
+sdeclcd_hbar(Driver *drvthis, int x, int y, int len, int promille, int options)
+{
+	PrivateData *p = drvthis->private_data;
+	int i,j;
+
+	if (hbar != p->ccmode) {
+		for (i = 0; i < SDEC_CELL_W; i++)
+			for (j = 0; j < SDEC_CELL_H; j++) {
+				//Set Custom Char Address
+				sdec_exec(SDEC_FN_CG_ADD |
+					(i * SDEC_CELL_H + j), p->bklgt);
+				//Write bitmap at Address
+				sdec_write(p->hbar_cg[i * SDEC_CELL_H + j],
+					p->bklgt);
+			}
+		p->ccmode = hbar;
 	}
-        
-        if (cachestale == 1) {
-            sdeclcd_writecgram(p, n, out);
-            report(RPT_DEBUG, "%s: Icon Cache was stale", drvthis->name);
-        }
-        else
-            report(RPT_DEBUG, "%s: Used Icon Cache", drvthis->name);
-}
-
-/**
- * Write a special icon to the LCD's CGRam
- */
-MODULE_EXPORT int
-sdeclcd_icon (Driver *drvthis, int x, int y, int icon)
-{
-    //PrivateData *p = drvthis->private_data;
-    report(RPT_DEBUG, "%s: icon -- we ran :]", drvthis->name);
-    static unsigned char heart_open[] = 
-		{ b__XXXXX,
-		  b__X_X_X,
-                  b_______,
-		  b_______,
-		  b__X___X,
-		  b__XX_XX,
-		  b__XXXXX };
-	static unsigned char heart_filled[] = 
-		{ b__XXXXX,
-		  b__X_X_X,
-		  b___X_X_,
-		  b___XXX_,
-		  b__X_X_X,
-		  b__XX_XX,
-		  b__XXXXX };
-
-    switch (icon) {
-	case ICON_BLOCK_FILLED:
-	    sdeclcd_chr(drvthis, x, y, 255);
-	    break;
-	case ICON_HEART_FILLED:
-	    sdeclcd_set_char(drvthis, 0, heart_filled);
-	    sdeclcd_chr(drvthis, x, y, 0);
-	    break;
-	case ICON_HEART_OPEN:
-	    sdeclcd_set_char(drvthis, 1, heart_open);
-	    sdeclcd_chr(drvthis, x, y, 1);
-	    break;
-	default:
-	    return -1;
-    }
-    return 0;
-}
-
-/**
- * Draw our heart beat. I use 2 ram locations because i dont want to always have to write to the ram
- * on the LCD. Note heart_filled is memory 0 loc and heart_open is in memory 1 loc. (see above function)
- */
-MODULE_EXPORT void
-sdeclcd_heartbeat( Driver * drvthis, int type ) {
-    
-    report(RPT_DEBUG, "%s: heartbeat -- using CG RAM icons :]", drvthis->name);
-    PrivateData *p = drvthis->private_data;
-
-    if (type <= 0 || type > 2)
-        return;
-    
-    type--;
-    p->framenew[p->dispwidth-1] = type;
-
-}
-
-/**
- * Gets ready to draw the horizontal bars. The concept of this came from lcterm.c
- */
-static void
-sdeclcd_init_hbar (Driver *drvthis)
-{
-  PrivateData *p = (PrivateData *) drvthis->private_data;
-  static unsigned char hbar_1[] = 
-    { b__X____,
-      b__X____,
-      b__X____,
-      b__X____,
-      b__X____,
-      b__X____,
-      b__X____,
-      b__X____ };
-  
-  static unsigned char hbar_2[] = 
-    { b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___ };
-  
-  static unsigned char hbar_3[] =
-    { b__XXX__,
-      b__XXX__,
-      b__XXX__,
-      b__XXX__,
-      b__XXX__,
-      b__XXX__,
-      b__XXX__,
-      b__XXX__ };
-
-  static unsigned char hbar_4[] =
-    { b__XXXX_,
-      b__XXXX_,
-      b__XXXX_,
-      b__XXXX_,
-      b__XXXX_,
-      b__XXXX_,
-      b__XXXX_,
-      b__XXXX_ };
-
-  static unsigned char hbar_5[] =
-    { b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX };
-
-  if (p->last_ccmode == CCMODE_HBAR) 
-    return;
-
-//  report(RPT_WARNING,"%s setting hbar",drvthis->name);
-
-  p->ccmode = p->last_ccmode = CCMODE_HBAR;
-  
-  // I offset my memory locations because mem loc 0 and 1 are used for the heart beat icon.
-  sdeclcd_set_char(drvthis, 2, hbar_1);
-  sdeclcd_set_char(drvthis, 3, hbar_2);
-  sdeclcd_set_char(drvthis, 4, hbar_3);
-  sdeclcd_set_char(drvthis, 5, hbar_4);
-  sdeclcd_set_char(drvthis, 6, hbar_5);
-}
-
-/**
- * Gets ready to draw the vertical bars. The concept of this came from lcterm.c
- */
-static void
-sdeclcd_init_vbar (Driver *drvthis)
-{
-  PrivateData *p = (PrivateData *) drvthis->private_data;
-  static unsigned char vbar_1[] = 
-    { b_______,
-      b_______,
-      b_______,
-      b_______,
-      b_______,
-      b_______,
-      b_______,
-      b__XXXXX };
-  
-  static unsigned char vbar_2[] = 
-    { b_______,
-      b_______,
-      b_______,
-      b_______,
-      b_______,
-      b_______,
-      b__XXXXX,
-      b__XXXXX };
-  
-  static unsigned char vbar_3[] =
-    { b_______,
-      b_______,
-      b_______,
-      b_______,
-      b_______,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX };
-
-
-  static unsigned char vbar_4[] =
-    { b_______,
-      b_______,
-      b_______,
-      b_______,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX };
-
-
-  static unsigned char vbar_5[] =
-    { b_______,
-      b_______,
-      b_______,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX };
-
-  static unsigned char vbar_6[] =
-    { b_______,
-      b_______,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX };
-      
-  static unsigned char vbar_7[] =
-    { b_______,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX };
-      
-
-  static unsigned char vbar_8[] =
-    { b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX,
-      b__XXXXX };
-      
-  if (p->last_ccmode == CCMODE_VBAR)
-    return;
-
-//  report(RPT_WARNING,"%s setting vbar",drvthis->name);
-
-  p->ccmode = p->last_ccmode = CCMODE_VBAR;
-  
-  // I offset my memory locations because mem loc 0 and 1 are used for the heart beat icon.
-  sdeclcd_set_char(drvthis, 0, vbar_1);
-  sdeclcd_set_char(drvthis, 1, vbar_2);
-  sdeclcd_set_char(drvthis, 2, vbar_3);
-  sdeclcd_set_char(drvthis, 3, vbar_4);
-  sdeclcd_set_char(drvthis, 4, vbar_5);
-  sdeclcd_set_char(drvthis, 5, vbar_6);
-  sdeclcd_set_char(drvthis, 6, vbar_7);
-  sdeclcd_set_char(drvthis, 7, vbar_8);
-
-}
-
-/**
- * Sets up for big numbers.
- * \param drvthis  Pointer to driver structure.
- */
-static void
-sdeclcd_init_num (Driver *drvthis)
-{
-  PrivateData *p = (PrivateData *) drvthis->private_data;
-
-  static unsigned char bchar_1[] = 
-    { b___XXXX,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___ };
-
-  static unsigned char bchar_2[] = 
-    { b__XXXX_,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX };
-
-  static unsigned char bchar_3[] = 
-    { b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b___XXXX };
-
-  static unsigned char bchar_4[] = 
-    { b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b__XXXX_ };
-
-  static unsigned char bchar_5[] = 
-    { b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX };
-
-  static unsigned char bchar_6[] = 
-    { b__XXXXX,
-      b_______,
-      b_______,
-      b_______,
-      b_______,
-      b_______,
-      b_______,
-      b__XXXXX };
-
-  static unsigned char bchar_7[] = 
-    { b__XXXX_,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b_____XX,
-      b__XXXX_ };
-
-  static unsigned char bchar_8[] = 
-    { b___XXXX,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b__XX___,
-      b___XXXX };
-
-
-  if (p->last_ccmode == CCMODE_BIGNUM) 
-    /* Work already done */
-    return;
-
-//  report(RPT_WARNING,"%s setting bignum",drvthis->name);
-
-  p->ccmode = p->last_ccmode = CCMODE_BIGNUM;
-
-  // I offset my memory locations because mem loc 0 and 1 are used for the heart beat icon.
-  sdeclcd_set_char(drvthis, 0, bchar_1);
-  sdeclcd_set_char(drvthis, 1, bchar_2);
-  sdeclcd_set_char(drvthis, 2, bchar_3);
-  sdeclcd_set_char(drvthis, 3, bchar_4);
-  sdeclcd_set_char(drvthis, 4, bchar_5);
-  sdeclcd_set_char(drvthis, 5, bchar_6);
-  sdeclcd_set_char(drvthis, 6, bchar_7);
-  sdeclcd_set_char(drvthis, 7, bchar_8);
-}
-
-
-
-
-/*
- * Draws a horizontal bar from left to right. Taken from lcterm.c
-*/
-MODULE_EXPORT void
-sdeclcd_hbar (Driver *drvthis, int x, int y, int len, int promille, int options)
-{
-  PrivateData *p = drvthis->private_data;
-  sdeclcd_init_hbar(drvthis);
-  lib_hbar_static(drvthis, x, y, len, promille, options, p->cellwidth, 1);
+	//1 bar is char 0, so offset is -1
+	lib_hbar_static(drvthis, x, y, len, promille, options, SDEC_CELL_W, -1);
 }
 
 /*
- * Draws a vertical bar from bottom to top. Taken from lcterm.c
+ * API:
 */
 MODULE_EXPORT void
-sdeclcd_vbar (Driver *drvthis, int x, int y, int len, int promille, int options)
+sdeclcd_vbar(Driver *drvthis, int x, int y, int len, int promille, int options)
 {
-  PrivateData *p = drvthis->private_data;
-  sdeclcd_init_vbar(drvthis);
-  lib_vbar_static(drvthis, x, y, len, promille, options, p->cellheight, -1);
-}
+	PrivateData *p = drvthis->private_data;
+	int i,j;
 
+	if (vbar != p->ccmode) {
+		for (i = 0; i < SDEC_NUM_CC; i++)
+			for (j = 0; j < SDEC_CELL_H; j++) {
+				//Set Custom Char Address
+				sdec_exec(SDEC_FN_CG_ADD |
+				        (i * SDEC_CELL_H + j), p->bklgt);
+				//Write bitmap at Address
+				sdec_write(p->vbar_cg[i * SDEC_CELL_H + j],
+					p->bklgt);
+			}
+		p->ccmode = vbar;
+	}
+	lib_vbar_static(drvthis, x, y, len, promille, options, SDEC_CELL_H, -1);
+}
 
 /**
- * Write a big number to the screen.
- * \param drvthis  Pointer to driver structure.
- * \param x        Horizontal character position (column).
- * \param num      Character to write (0 - 10 with 10 representing ':')
+ * API:
  */
-MODULE_EXPORT void sdeclcd_num(Driver *drvthis, int x, int num)
-{
-//  PrivateData *p = (PrivateData *) drvthis->private_data; /*unused in this function. Steve */
-
-  static char bignum_map[11][2][2] = {
-    { /* 0: */
-      {0,1},
-      {2,3},
-    },
-    { /* 1: */
-      {32,4},
-      {32,4},
-    },
-    { /* 2: */
-      {5,6},
-      {7,5},
-    },
-    { /* 3: */
-      {5,6},
-      {5,6},
-    },
-    { /* 4: */
-      {2,3},
-      {32,4},
-    },
-    { /* 5: */
-      {7,5},
-      {5,6},
-    },
-    { /* 6: */
-      {7,5},
-      {7,6},
-    },
-    { /* 7: */
-      {0,1},
-      {32,4},
-    },
-    { /* 8: */
-      {7,6},
-      {7,6},
-    },
-    { /* 9: */
-      {7,6},
-      {5,6},
-    },
-    { /* colon: */
-      {'-','-'},
-      {'-','-'},
-    }};
-
-  sdeclcd_init_num(drvthis);
-
-  if ((num < 0) || (num > 10))
-    return;
-  if (num == 10) 
-    return; 
-    int x2, y2;
-
-//    sdeclcd_init_num(drvthis);
-
-    for (x2 = 0; x2 < 2; x2++) {
-      for (y2 = 0; y2 < 2; y2++) {
-	sdeclcd_chr(drvthis, x+x2, y2+1, bignum_map[num][y2][x2]);
-//	sdeclcd_chr(drvthis, x+x2, y2+1, '0'+num);
-      }	
-//      if (num == 10)
-//	x2 = 2; /* =break, for colon only */
-    }
-}
-
-/*
- * Get keyboard and return key name . jj.Goessens nov 2009
- *
- * Reworked to add support for X-e boxes. fmertz dec 2011
-*/
-
-MODULE_EXPORT const char *sdeclcd_get_key(Driver *drvthis)
+MODULE_EXPORT void
+sdeclcd_num(Driver *drvthis, int x, int num)
 {
 	PrivateData *p = (PrivateData *) drvthis->private_data;
-	unsigned readval;
-	
-	// check backlight timer
-	if (p->bklgt_timer != 0) //Auto-off feature turned on
-	    {
-	    if (time(NULL)-p->bklgt_lasttime > p->bklgt_timer) //timer expired
-			{
-			if (1 == p->bklgt) //light on?
-				{
-				p->bklgt=0;
-				port_out(p->port+2, port_in(p->port+2) | 0x01); //turns light off
-				//port_out(p->port+2, ((port_in(p->port+2) & 0xFE) | (0x00 + (1 ^ p->bklgt))));
-				}
+	int i,j;
+
+	//Big Nums are made of these chunks:
+	static char bignum_map[11][2][2] = {
+		{ {0,1},    {2,3}},	//0
+		{ {32,4},  {32,4}},	//1
+		{ {5,6},    {7,5}},
+		{ {5,6},    {5,6}},
+		{ {2,3},   {32,4}},
+		{ {7,5},    {5,6}},
+		{ {7,5},    {7,6}},
+		{ {0,1},    {32,4}},
+		{ {7,6},    {7,6}},
+		{ {7,6},    {5,6}},	//9
+		{ {0xA1,32},{0xDF,32}}};//:
+
+	if (num < 0 || num > 10)
+		return;
+	//Check custom char in LCD memory
+	if (bignum != p->ccmode) {
+		for (i = 0; i < SDEC_NUM_CC; i++)
+			for (j = 0; j < SDEC_CELL_H; j++) {
+				//Set Custom Char Address
+				sdec_exec(SDEC_FN_CG_ADD |
+				        (i * SDEC_CELL_H + j), p->bklgt);
+				//Write bitmap at Address
+				sdec_write(p->bignum_cg[i * SDEC_CELL_H + j],
+					p->bklgt);
 			}
-	    else //timer is current
-			if (0 == p->bklgt) //light is off?
-				{
-				p->bklgt=1;
-	    		port_out(p->port+2, port_in(p->port+2) & 0xFE); //turns light on
-	    		}
-		}
-	// read keyboard status and mask according to
-	// http://en.wikipedia.org/wiki/Parallel_port (status register)
-	readval = port_in(p->port+1) & 0xF8;
+		p->ccmode = bignum;
+	}
+	//Update the frame buffer
+    for (i = 0; i < 2; i++)
+    	for (j = 0; j < 2; j++)
+		if (bignum_map[num][j][i] != ' ')
+		      sdeclcd_chr(drvthis, x + i, j + 1, bignum_map[num][j][i]);
+}
+
+/**
+  * API: 
+  * This routine implements the control of the back light. Here,
+  * we set the back light status variable only, and let the next update take
+  * care of the actual light control line.
+  * Try and keep the light off, unless someone pushed a button not too long ago.
+  * The light has a poor half life, so try and preserve it.
+  */
+MODULE_EXPORT void 
+sdeclcd_backlight(Driver *drvthis, int level)
+{
+	PrivateData *p = (PrivateData *) drvthis->private_data;
+
+	if (time(NULL) - p->bklgt_lasttime >= p->bklgt_timer || 0 == level)
+		p->bklgt = BACKLIGHT_OFF;
+	else
+		p->bklgt = BACKLIGHT_ON;
+}
+
+/*
+ * API:
+ * Get key from keypad. This routine implements the polling of the keypad. This
+ * is not part of the SDEC LCD, but is wired through the parallel port as well.
+ * It seems natural to include it in this driver. Different boxes have different
+ * mapping to keys, but all codes are fortunately unique.
+ * As this routine is called periodically by the server, this is where we added
+ * the logic to turn off the backlight after some time.
+ *
+*/
+MODULE_EXPORT const char *
+sdeclcd_get_key(Driver *drvthis)
+{
+	PrivateData *p = (PrivateData *) drvthis->private_data;
+	unsigned kbd;
+	
+	/* check backlight timer. It is important to make sure we turn the light
+	 * off when there is no activity. With a half life of only 3,000 hours,
+	 * we need to preserve it.
+	 */
+	if (time(NULL) - p->bklgt_lasttime >= p->bklgt_timer)
+		p->bklgt = BACKLIGHT_OFF;
+	else
+		p->bklgt = BACKLIGHT_ON;
+
+	// read keyboard status
+	kbd = port_in(LPT_STATUS) & LPT_STUS_MASK;
 	
 	// check if kbd change
-	if (readval == p->lastkbd)
+	if (kbd == p->lastkbd)
 		return NULL;
 	// reset backlight counter
-	p->bklgt_lasttime=time(NULL);
+	p->bklgt_lasttime = time(NULL);
 
-	p->lastkbd=readval;
-	// return text according to status reg mapping:
-	//X-e 	 U:70 R:F8 D:68 L:58 Rel:78
-	//X-peak U:C8 R:E0 D:C0 L:E8 Rel: 88,80,A8,A0
-	switch (readval) 
-		{
+	p->lastkbd = kbd;
+	/* Return key text according to status reg mapping:		*
+	 *X-e 	 U:70 R:F8 D:68 L:58 Rel:78				*
+	 *X-peak U:C8 R:E0 D:C0 L:E8 Rel: 88,80,A8,A0			*/
+	switch (kbd) {
 		case 0x70:
 		case 0xC8:
-				return("Up");
+			return("Up");
 		case 0xF8:
 		case 0xE0:
-				return ("Right");
+			return ("Right");
 		case 0x68:
 		case 0xC0:
-				return ("Down");
+			return ("Down");
 		case 0x58:
 		case 0xE8:
-				return("Left");
+			return("Left");
 		case 0x78: //button Releases
 		case 0x88:
 		case 0x80:
 		case 0xA8:
 		case 0xA0:
-				return(NULL);
-		//Combination not mapped:
-		//
+			return(NULL);
+
+		//Code not mapped:
 		default:
-				report(RPT_DEBUG, "LCDd sdeclcd.c/sdeclcd_get_key() status value %2x unmapped", readval);
-			    return(NULL);
+			report(RPT_DEBUG,
+			  "LCDd sdeclcd.c/sdeclcd_get_key() %2x unmapped", kbd);
+			return(NULL);
 		}
 }
 
+/*
+ * API:
+ */
+MODULE_EXPORT const char *
+sdeclcd_get_info(Driver *drvthis) {	return SDEC_IDENT; }

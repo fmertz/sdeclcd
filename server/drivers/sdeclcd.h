@@ -1,16 +1,16 @@
-/**
- *  This is the LCDproc driver for SDEC LCD Devices, 
- *  like the one found in the FireBox firewall device.
+/*-
+ *  This is the LCDproc driver for SDEC LCD Devices.
+ *  They are found in the Watchguard FireBox firewall appliances.
+ *	They are interfaced through the parallel port.
  *
- *  Copyright(C) 2008 Jayson Kubilis (jekubili AT ktechs dot net)
+ *  The code is based on the spec file LMC-S2D20-01.pdf,
+ *  a technical hardware and programming guide for this LCD.
  *
- *    based on GPL'ed code:
- *
- *       + files from LCDproc source tree
+ *  Copyright(C) 2011 Francois Mertz  (fireboxled@gmail.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation; either version 3 of the License, or
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -28,30 +28,27 @@
 #ifndef SDECLCD_H
 #define SDECLCD_H
 
+#ifndef LCD_H
 #include "lcd.h"
+#endif
 
-MODULE_EXPORT int sdeclcd_init (Driver *drvthis);
-MODULE_EXPORT void sdeclcd_close (Driver *drvthis);
-MODULE_EXPORT int sdeclcd_width (Driver *drvthis);
-MODULE_EXPORT int sdeclcd_height (Driver *drvthis);
-MODULE_EXPORT void sdeclcd_flush (Driver *drvthis);
-MODULE_EXPORT void sdeclcd_string (Driver *drvthis, int x, int y, char string[]);
-MODULE_EXPORT void sdeclcd_chr (Driver *drvthis, int x, int y, char c);
-MODULE_EXPORT void sdeclcd_clear (Driver *drvthis);
-MODULE_EXPORT int sdeclcd_cellwidth (Driver *drvthis);
-MODULE_EXPORT int sdeclcd_cellheight (Driver *drvthis);
-MODULE_EXPORT void sdeclcd_set_char (Driver *drvthis, int n, unsigned char *dat);
-MODULE_EXPORT int sdeclcd_icon (Driver *drvthis, int x, int y, int icon);
-MODULE_EXPORT void sdeclcd_heartbeat( Driver * drvthis, int type );
-MODULE_EXPORT void sdeclcd_vbar (Driver *drvthis, int x, int y, int len, int promille, int options);
-MODULE_EXPORT void sdeclcd_hbar (Driver *drvthis, int x, int y, int len, int promille, int options);
-MODULE_EXPORT void sdeclcd_num (Driver *drvthis, int x, int num);
-
-//
-//MODULE_EXPORT void sdeclcd_old_vbar (Driver *drvthis, int x, int len);
-//MODULE_EXPORT void sdeclcd_old_hbar (Driver *drvthis, int x, int y, int len);
-//MODULE_EXPORT void sdeclcd_old_icon (Driver *drvthis, int which, char dest);
-
-// added keypad 
-MODULE_EXPORT const char *sdeclcd_get_key(Driver *drvthis);
+MODULE_EXPORT int sdeclcd_init(Driver *);
+MODULE_EXPORT void sdeclcd_close(Driver *);
+MODULE_EXPORT int sdeclcd_width(Driver *);
+MODULE_EXPORT int sdeclcd_height(Driver *);
+MODULE_EXPORT void sdeclcd_flush(Driver *);
+MODULE_EXPORT void sdeclcd_string(Driver *, int, int, char *);
+MODULE_EXPORT void sdeclcd_chr(Driver *, int , int , char);
+MODULE_EXPORT void sdeclcd_clear(Driver *);
+MODULE_EXPORT int sdeclcd_cellwidth(Driver *);
+MODULE_EXPORT int sdeclcd_cellheight(Driver *);
+MODULE_EXPORT int sdeclcd_get_free_char (Driver *);
+MODULE_EXPORT int sdeclcd_icon(Driver *, int , int , int);
+MODULE_EXPORT void sdeclcd_heartbeat(Driver * , int);
+MODULE_EXPORT void sdeclcd_vbar(Driver *, int , int , int , int , int);
+MODULE_EXPORT void sdeclcd_hbar(Driver *, int , int , int , int , int);
+MODULE_EXPORT void sdeclcd_num (Driver *, int , int);
+MODULE_EXPORT const char *sdeclcd_get_key(Driver *);
+MODULE_EXPORT void sdeclcd_backlight(Driver *, int);
+MODULE_EXPORT const char *sdeclcd_get_info(Driver *);
 #endif

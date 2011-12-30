@@ -1,3 +1,15 @@
+lcdproc (0.5dev+sdeclcd1.06) UNRELEASED; urgency=low
+
+  + new driver: sdeclcd
+
+ -- F Mertz <fireboxled@gmail.com>  Fri, 30 Dec 2011 11:11:11 -0500
+
+lcdproc (0.5dev+cvs20111205) UNRELEASED; urgency=low
+
+  * New snapshot from upstream CVS
+
+ -- F Mertz <fireboxled@gmail.com>  Mon, 05 Dec 2011 11:11:11 -0500
+
 lcdproc (0.5.2+cvs20090607) UNRELEASED; urgency=low
 
   * New snapshot from upstream CVS
