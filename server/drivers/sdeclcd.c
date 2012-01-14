@@ -24,17 +24,6 @@
  *
  *  Thanks for playing!
  *
- * Contributors:
- *
- * Jayson Kubilis (jekubili@ktechs.net):
- *		Initial version
- *
- * JJ Goessens (jj@goessens.dyndns.org):
- *		Initial Keyboard support
- *		Backlight wiring
- *
- * stephenw10:
- *		Additional keyboard codes
  */
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -196,12 +185,14 @@ static inline void
 _sdec_control_wait(unsigned char register_select, unsigned char backlight,
                    unsigned char data, int usec)
 {
+#ifdef HAVE_PCSTYLE_LPT_CONTROL
 	port_out(LPT_CONTROL,
 	         (register_select | backlight | SDEC_ENABLE) ^ LPT_CTRL_MASK);
 	port_out(LPT_DEFAULT, data);
 	timing_uPause(SDEC_HOLD_ENABLE);
 	port_out(LPT_CONTROL, (register_select | backlight) ^ LPT_CTRL_MASK);
 	timing_uPause(usec);
+#endif
 }
 
 /**
@@ -290,8 +281,9 @@ sdeclcd_init(Driver *drvthis)
 	for (i=0;i<SDEC_NUM_CC;i++)
 		for (j=0;j<SDEC_CELL_H;j++) {
 			//Visualize this:
-			p->vbar_cg[i * SDEC_CELL_H + j]=(j <= i) ? 0xFF :0;
-			p->hbar_cg[i * SDEC_CELL_H + j]=(~(0x0F >> i)) & 0x1F;
+			p->vbar_cg[i * SDEC_CELL_H + SDEC_CELL_H - j -1] = 
+				(j <= i) ? 0xFF :0;
+			p->hbar_cg[i * SDEC_CELL_H + j] = (~(0x0F >> i)) & 0x1F;
 		}
 	
 	p->bignum_cg = bignum_bitmaps;
@@ -655,8 +647,11 @@ sdeclcd_get_key(Driver *drvthis)
 		p->bklgt = BACKLIGHT_ON;
 
 	// read keyboard status
+#ifdef HAVE_PCSTYLE_LPT_CONTROL
 	kbd = port_in(LPT_STATUS) & LPT_STUS_MASK;
-	
+#else
+	kbd = p->lastkbd;
+#endif
 	// check if kbd change
 	if (kbd == p->lastkbd)
 		return NULL;
