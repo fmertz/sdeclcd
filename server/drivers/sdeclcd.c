@@ -10,7 +10,7 @@
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 3 of the License, or
+ * the Free Software Foundation; either version 2 of the License, or
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -395,7 +395,7 @@ sdeclcd_string(Driver *drvthis, int x, int y, char string[])
 
 	l = strlen(string);
 	memcpy(p->framebuf + (x - 1)+(y - 1) * SDEC_DISP_W, string,
-	       (l > SDEC_DISP_W - y - 1) ? SDEC_DISP_W - y - 1: l);
+	       (l + x -1 > SDEC_DISP_W) ? SDEC_DISP_W - x + 1: l);
 }
 
 /**
@@ -529,8 +529,8 @@ sdeclcd_hbar(Driver *drvthis, int x, int y, int len, int promille, int options)
 			}
 		p->ccmode = hbar;
 	}
-	//1 bar is char 0, so offset is -1
-	lib_hbar_static(drvthis, x, y, len, promille, options, SDEC_CELL_W, -1);
+	//1 bar is char 0 or 8, so offset is 7
+	lib_hbar_static(drvthis, x, y, len, promille, options, SDEC_CELL_W, 7);
 }
 
 /*
@@ -554,7 +554,7 @@ sdeclcd_vbar(Driver *drvthis, int x, int y, int len, int promille, int options)
 			}
 		p->ccmode = vbar;
 	}
-	lib_vbar_static(drvthis, x, y, len, promille, options, SDEC_CELL_H, -1);
+	lib_vbar_static(drvthis, x, y, len, promille, options, SDEC_CELL_H, 7);
 }
 
 /**
