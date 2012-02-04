@@ -15,7 +15,6 @@
 /IOWarrior.h/1.24/Mon Mar 28 18:17:58 2011//
 /MD8800.c/1.9/Mon Mar 28 18:17:58 2011//
 /MD8800.h/1.4/Mon Mar 28 18:17:58 2011//
-/Makefile.am/1.105/Sun Nov 27 10:36:51 2011//
 /MtxOrb.c/1.120/Mon Mar 28 18:17:58 2011//
 /MtxOrb.h/1.29/Mon Mar 28 18:17:58 2011//
 /NoritakeVFD.c/1.19/Mon Mar 28 18:17:58 2011//
@@ -39,15 +38,12 @@
 /glcd-drivers.h/1.4/Sun Nov 27 10:36:51 2011//
 /glcd-glcd2usb.c/1.3/Sat Dec  3 20:10:41 2011//
 /glcd-glcd2usb.h/1.1/Sun Nov 27 10:36:51 2011//
-/glcd-low.h/1.6/Sat Dec  3 20:10:41 2011//
 /glcd-png.c/1.2/Tue Nov 22 23:14:46 2011//
 /glcd-render.c/1.5/Sun Nov 27 10:36:51 2011//
 /glcd-render.h/1.2/Sun Nov 20 11:15:39 2011//
 /glcd-serdisp.c/1.1/Tue Nov 22 23:14:46 2011//
 /glcd-t6963.c/1.4/Thu Nov 24 07:44:25 2011//
-/glcd_drv.c/1.6/Sat Dec  3 20:10:41 2011//
 /glcd_drv.h/1.3/Sat Dec  3 20:10:41 2011//
-/glcd_font5x8.h/1.2/Thu Nov  3 21:58:17 2011//
 /glcdlib.c/1.15/Sat Oct 30 18:04:21 2010//
 /glcdlib.h/1.6/Sat Jan 30 18:53:44 2010//
 /glk.c/1.31/Mon Mar 28 18:17:58 2011//
@@ -64,7 +60,6 @@
 /hd44780-ethlcd.h/1.3/Wed Mar 30 06:35:22 2011//
 /hd44780-ext8bit.c/1.23/Mon Jan 18 22:25:00 2010//
 /hd44780-ext8bit.h/1.6/Wed Apr  4 13:52:38 2007//
-/hd44780-ftdi.c/1.12/Thu Oct  6 20:29:29 2011//
 /hd44780-ftdi.h/1.4/Mon Mar 28 18:17:58 2011//
 /hd44780-i2c.c/1.14/Sat Oct 30 18:04:21 2010//
 /hd44780-i2c.h/1.2/Wed Apr  4 13:52:38 2007//
@@ -72,7 +67,6 @@
 /hd44780-lcd2usb.h/1.6/Mon Mar 28 18:17:58 2011//
 /hd44780-lis2.c/1.18/Sat Oct 30 18:04:22 2010//
 /hd44780-lis2.h/1.2/Wed Apr  4 13:52:38 2007//
-/hd44780-low.h/1.49/Mon Mar 28 18:17:58 2011//
 /hd44780-serial.c/1.24/Wed Nov  2 20:04:37 2011//
 /hd44780-serial.h/1.13/Wed Nov  2 20:04:37 2011//
 /hd44780-serialLpt.c/1.26/Sat Jan 30 18:53:44 2010//
@@ -118,8 +112,6 @@
 /lcterm.h/1.7/Sun Feb 13 21:19:44 2011//
 /lircin.c/1.23/Mon Mar 28 18:17:59 2011//
 /lircin.h/1.10/Sat Sep 30 18:18:23 2006//
-/lis.c/1.11/Mon Mar 28 18:17:59 2011//
-/lis.h/1.7/Mon Mar 28 18:17:59 2011//
 /lpt-port.h/1.4/Mon Jun  3 21:34:25 2002//
 /mdm166a.c/1.5/Thu Nov  3 21:58:17 2011//
 /mdm166a.h/1.2/Tue Dec 28 11:08:00 2010//
@@ -129,15 +121,12 @@
 /mtc_s16209x.h/1.8/Mon Mar 28 18:17:59 2011//
 /mx5000.c/1.5/Sat Oct 30 18:04:22 2010//
 /mx5000.h/1.3/Tue Nov 15 19:28:22 2011//
-/picolcd.c/1.23/Sun Jan 23 13:28:16 2011//
-/picolcd.h/1.13/Thu Feb 10 22:45:35 2011//
 /port.h/1.24/Tue Jan 25 19:25:53 2011//
 /pylcd.c/1.35/Mon Mar 28 18:17:59 2011//
 /pylcd.h/1.11/Sun Feb 13 17:50:31 2011//
 /report.h/1.1/Sun Dec 30 00:15:27 2001//
 /sed1330.c/1.31/Mon Mar 28 18:17:59 2011//
 /sed1330.h/1.8/Sat Jan 15 19:32:02 2011//
-/sed1520.c/1.29/Thu Nov  3 21:58:17 2011//
 /sed1520.h/1.10/Sun Apr  3 18:07:15 2011//
 /sed1520fm.h/1.3/Sun Apr  3 18:07:15 2011//
 /serialPOS.c/1.16/Mon Mar 28 18:17:59 2011//
@@ -171,4 +160,17 @@
 /wirz-sli.h/1.13/Mon Mar 28 18:17:59 2011//
 /xosdlib_drv.c/1.14/Mon Mar 28 18:17:59 2011//
 /xosdlib_drv.h/1.5/Thu Feb 10 22:45:35 2011//
+/Makefile.am/1.107/Sat Feb  4 15:09:36 2012//
+/glcd-low.h/1.7/Sat Feb  4 15:09:36 2012//
+/glcd_drv.c/1.7/Sat Feb  4 15:09:36 2012//
+/glcd_font5x8.h/1.3/Sat Feb  4 15:09:36 2012//
+/hd44780-ftdi.c/1.13/Sat Feb  4 15:09:36 2012//
+/hd44780-low.h/1.50/Sat Feb  4 15:09:36 2012//
+/lis.c/1.12/Sat Feb  4 15:09:36 2012//
+/lis.h/1.8/Sat Feb  4 15:09:36 2012//
+/picolcd.c/1.24/Sat Feb  4 15:09:36 2012//
+/picolcd.h/1.14/Sat Feb  4 15:09:36 2012//
+/sdeclcd.c/1.1/Wed Feb  1 22:42:59 2012//
+/sdeclcd.h/1.1/Wed Feb  1 22:42:59 2012//
+/sed1520.c/1.30/Sat Feb  4 15:09:36 2012//
 D

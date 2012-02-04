@@ -11,4 +11,5 @@
 /init-lcdproc.rpm.in/1.5/Fri Oct  6 11:47:30 2006//
 /init-lcdvc.LSB.in/1.2/Fri May  2 11:10:28 2008//
 /init-lcdvc.debian.in/1.2/Fri May  2 11:10:28 2008//
-D
+D/debian////
+D/nightly////

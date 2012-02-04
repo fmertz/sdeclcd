@@ -1,7 +1,6 @@
 /.cvsignore/1.1/Sun May 22 07:16:49 2005//
 /Makefile.am/1.9/Wed Jan 19 19:04:54 2011//
 /README.docbook/1.4/Sat Jan 30 18:53:44 2010//
-/add-your-driver.docbook/1.13/Mon Jan 17 23:16:03 2011//
 /bookinfo.docbook/1.6/Mon Jan  3 10:21:50 2011//
 /driver-api.docbook/1.12/Mon Jan 17 23:16:04 2011//
 /introduction.docbook/1.3/Sat Jan 30 18:53:44 2010//
@@ -13,4 +12,5 @@
 /programming.docbook/1.3/Mon Jan 17 23:16:04 2011//
 /releasing.docbook/1.5/Sat Nov  5 10:19:37 2011//
 /shared-files.docbook/1.7/Mon Jan 17 23:16:04 2011//
+/add-your-driver.docbook/1.14/Sat Feb  4 15:09:32 2012//
 D
