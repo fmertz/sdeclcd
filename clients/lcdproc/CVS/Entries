@@ -22,7 +22,6 @@
 /machine_FreeBSD.c/1.21/Sat Dec  3 20:13:54 2011//
 /machine_Linux.c/1.19/Sun Nov 20 14:08:05 2011//
 /machine_NetBSD.c/1.14/Sun Nov 20 14:08:05 2011//
-/machine_OpenBSD.c/1.12/Sun Nov 20 14:08:05 2011//
 /machine_SunOS.c/1.10/Sun Nov 20 14:08:05 2011//
 /main.c/1.51/Wed Jan  5 23:34:37 2011//
 /main.h/1.18/Tue Feb  2 23:20:29 2010//
@@ -32,4 +31,5 @@
 /mode.h/1.10/Tue Feb  2 23:20:29 2010//
 /util.c/1.8/Sun Nov 20 15:24:14 2011//
 /util.h/1.5/Sun Nov 20 15:24:14 2011//
+/machine_OpenBSD.c/1.13/Mon May 21 16:40:22 2012//
 D

@@ -1,2 +1,6 @@
-A D/CVSROOT////
-A D/lcdproc////
+A D/debian////
+A D/old////
+A D/tests////
+R D/tests////
+R D/old////
+R D/debian////
