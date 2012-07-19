@@ -34,7 +34,21 @@
 #ifdef HAVE_STRING_H
 # include <string.h>
 #endif
-
+#ifdef HAVE_SYS_TYPES_H
+#include <sys/types.h>
+#endif
+#ifdef HAVE_SYS_STAT_H
+#include <sys/stat.h>
+#endif
+#ifdef HAVE_FCNTL_H
+#include <fcntl.h>
+#endif
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+#ifdef HAVE_SYS_PCIIO_H
+#include <sys/pciio.h>
+#endif
 #include "port.h"
 #include "lpt-port.h"
 #include "timing.h"
@@ -111,8 +125,37 @@
 /* Bits actually used by Status port */
 #define LPT_STUS_MASK		(SELIN|PAPEREND|ACK|BUSY|FAULT)
 
-/*
- * Driver implementation choices.
+/**
+ * Basic PCI constants for LEDs on GPIO (Low Pin Count LPC)
+ *
+ * 	From the various Intel ICHx datasheets
+ */
+#define LPC_VENDOR		0x8086	/* Intel			*/
+#define LPC_DEVICE_82801BA	0x2440	/* ICH2			X-Core	*/
+#define LPC_DEVICE_6300ESB	0x25A1	/* ICH5 6300ESB		X-Peak	*/
+#define LPC_DEVICE_82801FBM	0x2641	/* ICH6 Mobile LPC	X-Core-e*/
+#define LPC_DEVICE_82801GBGR	0x27B8	/* ICH7 		XTM	*/
+#define GPIO_BASE_PORT_MASK	0x0000FFC0 /* bits 15:6 count		*/
+#define GPIO_CNTL_MASK		0x10	/* bit 4 counts			*/
+/**
+ * Basic constants for LEDs on GPIO (SuperIO).
+ *
+ * 	From Winbond W83627THG datasheet
+ */
+#define SIO_EFIR		0x2E	/* Extented Function Index Reg	*/
+#define SIO_EFDR		0x2F	/* Extended Function Data Reg	*/
+#define SIO_INEF		0x87	/* Enter Extended Function Mode	*/
+#define SIO_OUTEF		0xAA	/* Exit Extended Function Mode	*/
+#define SIO_DEV_SEL		0x07	/* Logical Device Register	*/
+#define SIO_GPIO2_ACTIVATE	0x30	/* Register to Enable GPIO2	*/
+#define SIO_GPIO2_DEV		0x08	/* GPIO2 Device Index		*/
+#define SIO_GPIO2_SEL		0xF0	/* Register to I vs O selection	*/
+#define SIO_GPIO2_LVL		0xF1	/* Register for I/O values	*/
+
+#define SDEC_OUTPUT_MASK	0x3F
+
+/**
+ * Driver implementation choices
  *
  * Heart beat location on screen, and corresponding address, char,
  * and backlight timeout
@@ -121,6 +164,7 @@
 #define SDEC_HB_ADD		(SDEC_ADD_LINE1+SDEC_HB_LOC)
 #define SDEC_HB_CHAR		':'
 #define SDEC_BKLT_DFT		30
+#define SDEC_LED_STEPS		1
 
 /**
  * This structure will hold data private to this Driver
@@ -134,10 +178,20 @@ typedef struct driver_private_data {
 	unsigned char lastkbd;	/* Last keyboard status			*/
 	unsigned char hb_stus;	/* Heart Beat status			*/
 	unsigned bklgt_timer;	/* Seconds to keep the backlight on	*/
-	time_t bklgt_lasttime;	/* When back light was turned on	*/
-	time_t hrbt_lasttime;	/* When heart beat was output		*/
-	char *framebuf;		/* Frame buffer				*/
-	char *framelcd;		/* Frame buffer on the LCD		*/
+	unsigned led_sequence;	/* Sequence to drive LEDs with		*/
+	unsigned char led_index;/* Index into the sequence for LEDs	*/
+	unsigned char led_last;	/* Last LED level			*/
+	unsigned model;		/* LPC Device ID (identification)	*/
+	unsigned gpio_lvl;	/* Port number for GPIO level		*/
+	unsigned gpio_lvl2;	/* Second Port number for GPIO level	*/
+	unsigned char gpio_step;/* Pace the updates to the LEDs		*/
+	unsigned char gpio_on;	/* Separate bit for tuning LEDs ON	*/
+	unsigned char red_bit;	/* GPIO pin for RED			*/
+	unsigned char grn_bit;	/* GPIO pin for GREEN			*/
+	time_t	bklgt_lasttime;	/* When back light was turned on	*/
+	time_t	hrbt_lasttime;	/* When heart beat was output		*/
+	char *framebuf;         /* Frame buffer				*/
+	char *framelcd;         /* Frame buffer on the LCD		*/
 	char *vbar_cg;		/* Vertical Bar bitmaps			*/
 	char *hbar_cg;		/* Horizontal Bar bitmaps		*/
 	char *bignum_cg;	/* Big Numbers bitmaps			*/
@@ -173,16 +227,22 @@ MODULE_EXPORT char *symbol_prefix = "sdeclcd_";	/* Prefix for API entries     */
  *		Wait for the LCD to execute the command, typically 40 micro sec
  *
  * Take into account the hardware inversion of some control port bits.
+ *
+ * This only works on PC-type parallel port. Try and let this compile on other
+ * platform, return no error, but produce no result.
+ *
  */
 static inline void
 _sdec_control_wait(unsigned char register_select, unsigned char backlight,
 		   unsigned char data, int usec)
 {
+#ifdef HAVE_PCSTYLE_LPT_CONTROL
 	port_out(LPT_CONTROL, (register_select | backlight | SDEC_ENABLE) ^ LPT_CTRL_MASK);
 	port_out(LPT_DEFAULT, data);
 	timing_uPause(SDEC_HOLD_ENABLE);
 	port_out(LPT_CONTROL, (register_select | backlight) ^ LPT_CTRL_MASK);
 	timing_uPause(usec);
+#endif
 }
 
 /**
@@ -214,7 +274,222 @@ sdec_init()
 }
 
 /**
- * API: Initialize the driver.
+ * This part takes care of initializing the access to the LEDs. The LEDs are
+ * controled by GPIO. The earlier models use the GPIO subsystem part of the Low
+ * Pin Count (LPC) device, itself part of the Intel Southbridge. The LPC is a
+ * discoverable PCI device, and, as such, requires code specific to each
+ * Operating System.
+ *
+ * http://en.wikipedia.org/wiki/I/O_Controller_Hub
+ *
+ * The later XTM models use the GPIO subsystem part of the SuperIO chip.
+ *
+ * http://en.wikipedia.org/wiki/SuperIO
+ *
+ * The LEDs show up as a single "Armed/Disarmed" indicator, that can be Red or
+ * Green. Both Red and Green together produces no output. Some models support 
+ * blinking in hardware, but this is not supported in the code.
+ */
+static void
+sdec_leds(Driver *drvthis)
+{
+	PrivateData *p = (PrivateData *) drvthis->private_data;
+	unsigned	shift;
+	unsigned	level = 0, level2 = 0;
+
+#ifdef __linux__
+	int		fd;
+	unsigned	gpio_base_port;
+	unsigned short	s;
+
+	/* Open LPC device config, always dom 0, bus 0, device 31, function 0 */
+	if (-1 == (fd = open("/sys/bus/pci/devices/0000:00:1f.0/config",
+	                     O_RDONLY))) {
+		report(RPT_WARNING,
+			  "LCDd sdeclcd.c/sdec_init() LPC not found in /sys");
+		return;
+	}
+	/* Check LPC vendor. Must be Intel		*/
+	if (sizeof(s) != read(fd, &s, sizeof(s))) {
+		report(RPT_WARNING, "LCDd sdeclcd.c/sdec_init() LPC Read err");
+		goto sdec_led_end;
+	}
+	if (LPC_VENDOR != s) {
+		report(RPT_WARNING, "LCDd sdeclcd.c/sdec_init() LPC Vendor err");
+		goto sdec_led_end;
+	}
+	/* Check LPC device.				*/
+	if (sizeof(s) != read(fd, &s, sizeof(s))) {
+		report(RPT_WARNING, "LCDd sdeclcd.c/sdec_init() LPC Read err");
+		goto sdec_led_end;
+	}
+	p->model = s;
+	/* From the device, we can set the specifics			*/
+	switch (s) {
+#endif
+#ifdef HAVE_SYS_PCIIO_H
+	struct pci_io LPC_io = { .pi_sel = 
+		{.pc_domain = 0, .pc_bus = 0, .pc_dev = 0x1f, .pc_func = 0},
+		.pi_reg = 0, .pi_width = 2, .pi_data = 0};
+	int	fd;
+
+	if (-1 == (fd = open("/dev/pci", O_RDWR))) {
+		report(RPT_WARNING,
+			  "LCDd sdeclcd.c/sdec_init() LPC not found in /dev");
+		return;
+	}
+	/* Check LPC Vendor					*/
+	if (-1 == ioctl(fd, PCIOCREAD, &LPC_io)) {
+		report(RPT_WARNING,
+			  "LCDd sdeclcd.c/sdec_init() LPC ioctl Vendor");
+		goto sdec_led_end;
+	}
+	if (LPC_VENDOR != LPC_io.pi_data) {
+		report(RPT_WARNING, "LCDd sdeclcd.c/sdec_init() LPC Vendor err");
+		goto sdec_led_end;
+	}
+	/* Check LPC device.				*/
+	LPC_io.pi_reg = 2;
+	LPC_io.pi_width = 2;
+	LPC_io.pi_data = 0;
+	if (-1 == ioctl(fd, PCIOCREAD, &LPC_io)) {
+		report(RPT_WARNING,
+			  "LCDd sdeclcd.c/sdec_init() LPC ioctl Dev");
+		goto sdec_led_end;
+	}
+	p->model = LPC_io.pi_data;
+
+	switch (LPC_io.pi_data) {
+#endif
+#if defined(__linux__) || defined (HAVE_SYS_PCIIO_H)
+		case LPC_DEVICE_82801BA:	/* X-Core		      */
+			shift = 0x58;		/* offset for GPIO BASE	      */
+			level = 0x0f;		/* Level register, bits 23:16 */
+			level2 = 0x0e;		/* Second level register      */
+			p->red_bit = 0x08; 	/* Red is GPIO 19	      */
+			p->grn_bit = 0x18;	/* Green is GPIO 19 and 20    */
+			p->gpio_on = 0x80;	/* Turns LED on		      */
+			break;
+		case LPC_DEVICE_6300ESB:	/* X-Peak		      */
+			shift = 0x58;		/* offset for GPIO BASE	      */
+			level = 0x39;		/* Level register, bits 15:8  */
+			p->red_bit = 0x01; 	/* Red is GPIO 40	      */
+			p->grn_bit = 0x02;	/* Green is GPIO 41	      */
+			break;
+		case LPC_DEVICE_82801FBM:	/* X-Core-e		      */
+			shift = 0x48;		/* offset for GPIO BASE	      */
+			level = 0x0f;		/* Level register, bits 23:16 */
+			p->red_bit = 0x08; 	/* Red is GPIO 19	      */
+			p->grn_bit = 0x10;	/* Green is GPIO 20	      */
+			break;
+		case LPC_DEVICE_82801GBGR:	/* XTM: W83627THG SuperIO     */
+			shift = 0x48;		/* offset for GPIO BASE	      */
+			level = SIO_EFIR;	/* SuperIO chip is hard wired */
+			level2 = SIO_EFDR;	/* to LPC ports 2E and 2F     */
+			p->red_bit = 0x10;
+			p->grn_bit = 0x20;
+			break;
+
+		default:
+			/* This LPC device is not known to be in Fireboxes */
+			report(RPT_WARNING,
+			       "LCDd sdeclcd.c/sdec_init() LPC Dev err");
+			goto sdec_led_end;
+	}
+
+	if (LPC_DEVICE_82801GBGR != p->model) {
+	    /* Inside here is code for LED control off of the LPC device GPIO */
+#endif
+#ifdef __linux__
+	    /* Seek to GPIO base port					*/
+	    if ((off_t)shift != lseek(fd, (off_t)shift, SEEK_SET)) {
+		report(RPT_WARNING, "LCDd sdeclcd.c/sdec_init() LPC Offset err");
+		goto sdec_led_end;
+	    }
+	    /* Get raw GPIO base port GPIO_BASE				*/
+	    if (sizeof(gpio_base_port) != read(fd, &gpio_base_port,
+					       sizeof(gpio_base_port))) {
+		    report(RPT_WARNING, "LCDd sdeclcd.c/sdec_init() LPC port err");
+		    goto sdec_led_end;
+	    }
+
+	    level += gpio_base_port & GPIO_BASE_PORT_MASK;
+	    if (level2)
+		    level2 += gpio_base_port & GPIO_BASE_PORT_MASK;
+#endif
+#ifdef HAVE_SYS_PCIIO_H
+	    /* Get raw GPIO base port GPIO_BASE				*/
+	    LPC_io.pi_reg = shift;
+	    LPC_io.pi_width = 4;
+	    LPC_io.pi_data = 0;
+	    if (-1 == ioctl(fd, PCIOCREAD, &LPC_io)) {
+		    report(RPT_WARNING,
+			      "LCDd sdeclcd.c/sdec_init() LPC ioctl GPIO");
+		    goto sdec_led_end;
+	    }
+	    level += LPC_io.pi_data & GPIO_BASE_PORT_MASK;
+	    if (level2)
+		    level2 += LPC_io.pi_data & GPIO_BASE_PORT_MASK;
+#endif
+#if defined(__linux__) || defined (HAVE_SYS_PCIIO_H)
+	} /* LPC_DEVICE_82801GBGR != p->mode */
+
+#ifdef HAVE_PCSTYLE_LPT_CONTROL
+	/* Once ports identified, request access to them		*/
+	if (port_access(level)) {
+		report(RPT_WARNING, "LCDd sdeclcd.c/sdec_init() LPC ioperm");
+		goto sdec_led_end;
+	}
+	if (level2) {
+		if (port_access(level2)) {
+			report(RPT_WARNING, "LCDd sdeclcd.c/sdec_init() LPC ioperm 2");
+			goto sdec_led_end;
+		}
+		p->gpio_lvl2 = level2;
+	}
+	p->gpio_lvl = level;
+
+	if (LPC_DEVICE_82801GBGR == p->model) {
+	    /* Inside here is code for LED control off of the SuperIO GPIO
+	     *
+	     * SuperIO can be controlled with sequence: (port, value):
+	     * (2E, 87) (2E, 87)	"Enter Extended Function Mode
+	     * (2E, 07)			"Point to Logical Device Register"
+	     * (2F, 08)			"Select Device 8 (GPIO2)"
+	     * (2E, <reg>)		"Point to register <reg>
+	     * (2F, <val>)		"Set register value to <val>"
+	     *
+	     * Enable GPIO2 device: set CR30 on logical device 8 to 0x01
+	     * <reg> = 30, <val> = 1
+	     *
+	     * Set bit 4 and 5 to 0 for output: set CRF0 on logical device 8
+	     * <reg> = F0, <val> = <val> & ~(bit_red | bit_grn)
+	     *
+	     * (2E, AA)			"Exit Extended Function Mode"
+	     */
+	    port_out(SIO_EFIR, SIO_INEF);
+	    port_out(SIO_EFIR, SIO_INEF);
+
+	    port_out(SIO_EFIR, SIO_DEV_SEL);
+	    port_out(SIO_EFDR, SIO_GPIO2_DEV);
+
+	    port_out(SIO_EFIR, SIO_GPIO2_ACTIVATE);
+	    port_out(SIO_EFDR, 0x01);
+
+	    port_out(SIO_EFIR, SIO_GPIO2_SEL);
+	    port_out(SIO_EFDR, port_in(SIO_EFDR) & ~(p->red_bit | p->grn_bit));
+
+	    port_out(SIO_EFIR, SIO_OUTEF);
+	}
+#endif
+
+sdec_led_end:
+	close (fd);
+#endif
+}
+
+/**
+ * API:
  */
 MODULE_EXPORT int
 sdeclcd_init(Driver *drvthis)
@@ -250,10 +525,18 @@ sdeclcd_init(Driver *drvthis)
 	p->bklgt_lasttime = time(NULL);
 	p->hrbt_lasttime = time(NULL);
 	p->hb_stus = HEARTBEAT_OFF;
-	p->framebuf = (char *)malloc(SDEC_DISP_W * SDEC_DISP_H);
-	p->framelcd = (char *)malloc(SDEC_DISP_W * SDEC_DISP_H);
-	p->vbar_cg = (char *)malloc(SDEC_CELL_H * SDEC_NUM_CC);
-	p->hbar_cg = (char *)malloc(SDEC_CELL_H * SDEC_NUM_CC);
+	p->led_sequence = 0;
+	p->led_index = 0;
+	p->led_last = 0xFF;
+	p->model = 0;
+	p->gpio_lvl = 0;
+	p->gpio_lvl2 = 0;
+	p->gpio_step = SDEC_LED_STEPS;
+	p->gpio_on = 0;
+	p->framebuf = (char *)malloc(SDEC_DISP_W*SDEC_DISP_H);
+	p->framelcd = (char *)malloc(SDEC_DISP_W*SDEC_DISP_H);
+	p->vbar_cg = (char *)malloc(SDEC_CELL_H*SDEC_NUM_CC);
+	p->hbar_cg = (char *)malloc(SDEC_CELL_H*SDEC_NUM_CC);
 	p->bignum_cg = (char *)bignum_bitmaps;
 
 	if (NULL == p->framebuf || NULL == p->framelcd ||
@@ -287,6 +570,7 @@ sdeclcd_init(Driver *drvthis)
 		return -1;
 	}
 	sdec_init();
+	sdec_leds(drvthis);
 	return 0;
 }
 
@@ -298,6 +582,18 @@ sdeclcd_close(Driver *drvthis)
 {
 	PrivateData *p = (PrivateData *) drvthis->private_data;
 
+	if (p->gpio_lvl)
+		if (port_deny(p->gpio_lvl)) {
+			report(RPT_WARNING, "%s: cannot release IO-permission for 0x%03X!",
+			       drvthis->name, p->gpio_lvl);
+		}
+
+	if (p->gpio_lvl2)
+		if (port_deny(p->gpio_lvl2)) {
+			report(RPT_WARNING, "%s: cannot release IO-permission for 0x%03X!",
+			       drvthis->name, p->gpio_lvl2);
+		}
+	
 	if (p) {
 		if (p->framebuf)
 			free(p->framebuf);
@@ -310,7 +606,7 @@ sdeclcd_close(Driver *drvthis)
 		free(p);
 	}
 
-	if (!port_deny_multiple(LPT_DEFAULT, 3)) {
+	if (port_deny_multiple(LPT_DEFAULT, 3)) {
 		report(RPT_WARNING, "%s: cannot release IO-permission for 0x%03X!",
 		       drvthis->name, LPT_DEFAULT);
 	}
@@ -382,17 +678,14 @@ MODULE_EXPORT void
 sdeclcd_string(Driver *drvthis, int x, int y, char string[])
 {
 	PrivateData *p = (PrivateData *) drvthis->private_data;
-	int len;
+	int l;
 
 	if (y < 1 || y > SDEC_DISP_H || x < 1 || x > SDEC_DISP_W)
 		return;
 
-	x--;			/* convert coordinates to 0-base */
-	y--;
-
-	len = strlen(string);
-	memcpy(p->framebuf + x + y * SDEC_DISP_W, string,
-	       (x + len > SDEC_DISP_W) ? SDEC_DISP_W - x : len);
+	l = strlen(string);
+	memcpy(p->framebuf + (x - 1)+(y - 1) * SDEC_DISP_W, string,
+	       (l + x -1 > SDEC_DISP_W) ? SDEC_DISP_W - x + 1: l);
 }
 
 /**
@@ -556,7 +849,7 @@ sdeclcd_hbar(Driver *drvthis, int x, int y, int len, int promille, int options)
 		}
 		p->ccmode = hbar;
 	}
-	/* 1 bar is at char 0 or 8, so offset is 7 (avoiding offset of -1) */
+	//1 bar is char 0 or 8, so offset is 7
 	lib_hbar_static(drvthis, x, y, len, promille, options, SDEC_CELL_W, 7);
 }
 
@@ -580,7 +873,6 @@ sdeclcd_vbar(Driver *drvthis, int x, int y, int len, int promille, int options)
 		}
 		p->ccmode = vbar;
 	}
-	/* see note in hbar */
 	lib_vbar_static(drvthis, x, y, len, promille, options, SDEC_CELL_H, 7);
 }
 
@@ -675,7 +967,14 @@ sdeclcd_get_key(Driver *drvthis)
 		p->bklgt = BACKLIGHT_ON;
 
 	/* read keyboard status */
+#ifdef HAVE_PCSTYLE_LPT_CONTROL
 	kbd = port_in(LPT_STATUS) & LPT_STUS_MASK;
+#else
+	kbd = p->lastkbd;
+#endif
+	if (LPC_DEVICE_82801GBGR == p->model && kbd > 0xA8)
+	    ++kbd; /* Break the overlap: add 1 for XTM	*/
+
 	/* check if keyboard changed */
 	if (kbd == p->lastkbd)
 		return NULL;
@@ -685,21 +984,27 @@ sdeclcd_get_key(Driver *drvthis)
 	p->lastkbd = kbd;
 	/*-
 	 * Return key text according to status reg mapping:
-	 * X-e 	 U:70 R:F8 D:68 L:58 Rel:78
+	 * X-e 	  U:70 R:F8 D:68 L:58 Rel:78
 	 * X-peak U:C8 R:E0 D:C0 L:E8 Rel: 88,80,A8,A0
+	 * XTM:   U:E0 D:C0 L:C8 R:E8 Rel: 88,80,A8,A0
 	 */
+
 	switch (kbd) {
 	    case 0x70:
 	    case 0xC8:
+	    case 0xE1:
 		return ("Up");
 	    case 0xF8:
 	    case 0xE0:
+	    case 0xE9:
 		return ("Right");
 	    case 0x68:
 	    case 0xC0:
+	    case 0xC1:
 		return ("Down");
 	    case 0x58:
 	    case 0xE8:
+	    case 0xC9:
 		return ("Left");
 	    case 0x78:		/* button Releases */
 	    case 0x88:
@@ -714,7 +1019,62 @@ sdeclcd_get_key(Driver *drvthis)
 }
 
 /**
- * API: Return info string about this driver.
+ * API: Updates LEDs as per "state". Here, "state" is supposed to contain the sequence the LEDs are
+ * to be lit by. We need to support Red, Green and Off. Therefore, we need 2 bits to encode the
+ * possible values. So, a 32 bit "state" can host a sequence of 16 separate illuminations. Each
+ * group of 2 bits is examined in sequence, as a time slot, each time output is called, and the
+ * hardware LEDs are updated accordingly.
+ */
+MODULE_EXPORT void
+sdeclcd_output(Driver *drvthis, int state)
+{
+	PrivateData *p = (PrivateData *) drvthis->private_data;
+	unsigned char level = 0;
+
+	p->led_sequence = state;
+
+	if (p->gpio_lvl && (0 == p->gpio_step--)) {
+		p->gpio_step = SDEC_LED_STEPS;
+		switch ((p->led_sequence >> p->led_index) & 0x03) {
+			case 0x01:
+				level |= p->red_bit;
+				break;
+			case 0x02:
+				level |= p->grn_bit;
+				break;
+		}
+		p->led_index = (p->led_index >= 30) ? 0 : p->led_index+2;
+#ifdef HAVE_PCSTYLE_LPT_CONTROL
+		if (level != p->led_last) {
+			if (LPC_DEVICE_82801GBGR != p->model) {
+				port_out(p->gpio_lvl,
+					 (port_in(p->gpio_lvl) & ~(p->red_bit | p->grn_bit)) | level);
+				if (p->gpio_lvl2)
+					port_out(p->gpio_lvl2,
+					(port_in(p->gpio_lvl2) & ~p->gpio_on) | (level) ? p->gpio_on : 0);
+			}
+			else
+			    {
+			    port_out(SIO_EFIR, SIO_INEF);
+			    port_out(SIO_EFIR, SIO_INEF);
+
+			    port_out(SIO_EFIR, SIO_DEV_SEL);
+			    port_out(SIO_EFDR, SIO_GPIO2_DEV);
+
+			    port_out(SIO_EFIR, SIO_GPIO2_LVL);
+			    port_out(SIO_EFDR,
+				    (port_in(SIO_EFDR) & ~(p->red_bit | p->grn_bit)) | level);
+
+			    port_out(SIO_EFIR, SIO_OUTEF);
+			    }
+			p->led_last = level;
+		}
+#endif
+	}
+};
+
+/*
+ * API:
  */
 MODULE_EXPORT const char *
 sdeclcd_get_info(Driver *drvthis)

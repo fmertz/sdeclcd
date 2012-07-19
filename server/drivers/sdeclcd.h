@@ -47,5 +47,12 @@ MODULE_EXPORT void sdeclcd_num(Driver *, int, int);
 MODULE_EXPORT const char *sdeclcd_get_key(Driver *);
 MODULE_EXPORT void sdeclcd_backlight(Driver *, int);
 MODULE_EXPORT const char *sdeclcd_get_info(Driver *);
+MODULE_EXPORT void sdeclcd_output(Driver *, int);
+
+/*
+ * Constants for output()
+ */
+#define SDEC_OUTPUT_RED			0x01
+#define	SDEC_OUTPUT_GREEN		0x02
 
 #endif
